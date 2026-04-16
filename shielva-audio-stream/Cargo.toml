@@ -1,0 +1,26 @@
+[package]
+name = "shielva-audio-stream"
+version = "0.1.0"
+edition = "2024"
+description = "High-performance audio streaming proxy — zero-copy WAV streaming + R2 upload"
+
+[dependencies]
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.12", features = ["stream", "multipart", "rustls-tls", "json"], default-features = false }
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+uuid = { version = "1", features = ["v4"] }
+futures-util = "0.3"
+tower-http = { version = "0.6", features = ["cors"] }
+tokio-stream = "0.1"
+http = "1"
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

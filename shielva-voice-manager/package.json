@@ -1,0 +1,29 @@
+{
+  "name": "shielva-voice-manager",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "kill": "lsof -ti:3025 | xargs kill -9 2>/dev/null; echo 'Port 3025 cleared'",
+    "dev": "npm run kill && next dev --port 3025 --experimental-https --experimental-https-key ../certificates/localhost-key.pem --experimental-https-cert ../certificates/localhost.pem",
+    "dev:http": "npm run kill && next dev --port 3025",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@tanstack/react-query": "^5.95.2",
+    "lucide-react": "^0.575.0",
+    "next": "^16.1.6",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3",
+    "sonner": "^2.0.7"
+  },
+  "devDependencies": {
+    "@tailwindcss/postcss": "^4.0.7",
+    "@types/node": "^20",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4.0.7",
+    "typescript": "^5"
+  }
+}
