@@ -1,0 +1,52 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <defs>
+    <linearGradient id="bgGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#c5e08a;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#8ab83a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#6d9f37;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="4" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <!-- Background Circle -->
+  <circle cx="100" cy="100" r="95" fill="url(#bgGradient)"/>
+  <!-- Four-pointed Star -->
+  <path
+    d="M100 30
+       L110 85 L100 75 L90 85 Z
+       M170 100
+       L115 110 L125 100 L115 90 Z
+       M100 170
+       L90 115 L100 125 L110 115 Z
+       M30 100
+       L85 90 L75 100 L85 110 Z"
+    fill="white"
+    filter="url(#glow)"
+  />
+  <!-- Refined star shape -->
+  <polygon
+    points="100,25 108,88 100,78 92,88 100,25"
+    fill="white"
+    filter="url(#glow)"
+  />
+  <polygon
+    points="175,100 112,108 122,100 112,92 175,100"
+    fill="white"
+    filter="url(#glow)"
+  />
+  <polygon
+    points="100,175 92,112 100,122 108,112 100,175"
+    fill="white"
+    filter="url(#glow)"
+  />
+  <polygon
+    points="25,100 88,92 78,100 88,108 25,100"
+    fill="white"
+    filter="url(#glow)"
+  />
+</svg>
