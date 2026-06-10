@@ -6,6 +6,7 @@
 const IDENTITY_URL = process.env.NEXT_PUBLIC_IDENTITY_URL || 'https://localhost:8009';
 const LOGIN_URL = process.env.NEXT_PUBLIC_AUTH_URL || 'https://localhost:3000';
 const APP_ID = 'VOICE_MANAGER';
+const APP_SLUG = 'voice';
 
 async function createBrowserFingerprint(): Promise<string> {
     const raw = `${navigator.userAgent}|${navigator.language}|${navigator.platform}`;
@@ -44,8 +45,10 @@ export async function redirectToLogin(reason?: string): Promise<void> {
 
         if (res.ok) {
             const { session_id, user_hash } = await res.json();
-            const reasonParam = reason ? `&reason=${reason}` : '';
-            window.location.href = `${LOGIN_URL}/login?sid=${session_id}&hash=${user_hash}${reasonParam}`;
+            const params = new URLSearchParams({ sid: session_id, hash: user_hash, app: APP_SLUG });
+            if (reason) params.set('reason', reason);
+            params.set('return_to', window.location.origin);
+            window.location.href = `${LOGIN_URL}/login?${params.toString()}`;
             return;
         }
 
@@ -58,7 +61,9 @@ export async function redirectToLogin(reason?: string): Promise<void> {
     if (typeof window !== 'undefined') {
         const params = new URLSearchParams();
         params.set('redirect_uri', callbackUrl);
+        params.set('app', APP_SLUG);
         if (reason) params.set('reason', reason);
+        params.set('return_to', window.location.origin);
         window.location.href = `${LOGIN_URL}/login?${params.toString()}`;
     }
 }

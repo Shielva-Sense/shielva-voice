@@ -4,10 +4,10 @@
   "private": true,
   "scripts": {
     "kill": "lsof -ti:3025 | xargs kill -9 2>/dev/null; echo 'Port 3025 cleared'",
-    "dev": "npm run kill && next dev --port 3025 --experimental-https --experimental-https-key ../certificates/localhost-key.pem --experimental-https-cert ../certificates/localhost.pem",
-    "dev:http": "npm run kill && next dev --port 3025",
+    "dev": "next dev --port 3025",
+    "dev:https": "next dev --port 3025 --experimental-https --experimental-https-key ../../certificates/localhost-key.pem --experimental-https-cert ../../certificates/localhost.pem",
     "build": "next build",
-    "start": "next start",
+    "start": "next start --port 3025",
     "lint": "next lint"
   },
   "dependencies": {

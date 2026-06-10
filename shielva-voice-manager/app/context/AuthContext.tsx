@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState, useCallback, ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, useCallback, useRef, ReactNode } from 'react';
 import { setAmtAuthState } from '../lib/amt-api';
 import { redirectToLogin } from '../lib/login-redirect';
 
@@ -48,6 +48,8 @@ const AuthContext = createContext<AuthContextValue>({
 
 export function AuthProvider({ children }: { children: ReactNode }) {
     const [user, setUser] = useState<User | null>(null);
+    const userRef = useRef<User | null>(null);
+    const isLoadingRef = useRef(true);
     const [isLoading, setIsLoading] = useState(true);
     const [sessionRejected, setSessionRejected] = useState(false);
     const [usageInfo, setUsageInfo] = useState<UsageInfo | null>(null);
@@ -70,14 +72,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
                 if (res.ok) {
                     const data = await res.json();
-                    setUser({
+                    const u: User = {
                         id: data.id || data.sub || '',
                         name: data.name || data.full_name || '',
                         email: data.email || '',
                         tenants: data.tenants || [],
                         role: data.role,
                         globalPersona: data.globalPersona,
-                    });
+                    };
+                    userRef.current = u;
+                    setUser(u);
                     setAmtAuthState(true, data.tenants?.[0], data.tenant_name || '');
                     // Purge stale R2 temp cache on login (best-effort, non-blocking)
                     fetch(`${API_BASE}/amt/v1/session/logout`, {
@@ -93,12 +97,49 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             } catch {
                 // Network error — don't reject session, allow retry
             } finally {
+                isLoadingRef.current = false;
                 setIsLoading(false);
             }
         };
 
         validateSession();
     }, [refreshUsage]);
+
+    // Cross-app SSO: re-validate on tab focus.
+    useEffect(() => {
+        const loginRoot = (process.env.NEXT_PUBLIC_AUTH_URL || 'https://localhost:3000').replace(/\/$/, '');
+        const handleVisibility = async () => {
+            if (document.visibilityState !== 'visible') return;
+            if (isLoadingRef.current) return;
+            try {
+                const res = await fetch(`${API_BASE}/identity/api/v1/unified/me`, { credentials: 'include' });
+                if (res.ok) {
+                    const data = await res.json() as Record<string, unknown>;
+                    const u: User = {
+                        id: (data.id || data.sub || '') as string,
+                        name: (data.name as string) || '',
+                        email: (data.email as string) || '',
+                        tenants: (data.tenants as string[]) || [],
+                        role: data.role as string | undefined,
+                        globalPersona: data.globalPersona as string | undefined,
+                    };
+                    userRef.current = u;
+                    setUser(u);
+                    setSessionRejected(false);
+                } else if (res.status === 401 || res.status === 403) {
+                    if (!userRef.current) return;
+                    userRef.current = null;
+                    setAmtAuthState(false);
+                    setUser(null);
+                    setSessionRejected(true);
+                    const returnTo = encodeURIComponent(window.location.origin);
+                    window.location.href = `${loginRoot}?return_to=${returnTo}`;
+                }
+            } catch {}
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => document.removeEventListener('visibilitychange', handleVisibility);
+    }, []);
 
     // ── Silent session keep-alive — re-hit /me every 30 min to slide the cookie expiry ──
     // This ensures the rolling 30-day session never expires while the tab is open.
@@ -124,27 +165,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             credentials: 'include',
         }).catch(() => { /* non-fatal */ });
 
-        // 2. Identity service logout
-        try {
-            const csrfToken = typeof document !== 'undefined'
-                ? (document.cookie.match(/shielva_csrf=([^;]+)/)?.[1] ?? null)
-                : null;
-            await fetch(`${IDENTITY_URL}/api/v1/unified/logout`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-                },
-            });
-        } catch {
-            // Proceed with client-side cleanup regardless
-        }
+        userRef.current = null;
         setAmtAuthState(false);
         setUser(null);
         setUsageInfo(null);
         setSessionRejected(false);
-        window.location.href = '/';
+        window.location.replace('/login');
     };
 
     const isSuperAdmin = !!(user?.role === 'super_admin' || user?.globalPersona === 'SUPERADMIN');
