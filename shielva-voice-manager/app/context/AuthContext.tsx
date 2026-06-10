@@ -165,28 +165,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             credentials: 'include',
         }).catch(() => { /* non-fatal */ });
 
-        // 2. Identity service logout
-        try {
-            const csrfToken = typeof document !== 'undefined'
-                ? (document.cookie.match(/shielva_csrf=([^;]+)/)?.[1] ?? null)
-                : null;
-            await fetch(`${IDENTITY_URL}/api/v1/unified/logout`, {
-                method: 'POST',
-                credentials: 'include',
-                headers: {
-                    'Content-Type': 'application/json',
-                    ...(csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
-                },
-            });
-        } catch {
-            // Proceed with client-side cleanup regardless
-        }
         userRef.current = null;
         setAmtAuthState(false);
         setUser(null);
         setUsageInfo(null);
         setSessionRejected(false);
-        await redirectToLogin('logout');
+        window.location.replace('/login');
     };
 
     const isSuperAdmin = !!(user?.role === 'super_admin' || user?.globalPersona === 'SUPERADMIN');
