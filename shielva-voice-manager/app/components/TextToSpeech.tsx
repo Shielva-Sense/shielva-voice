@@ -3,10 +3,11 @@
 import { useState, useEffect, useRef } from "react";
 import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
-import { synthesizeSpeech, translate, getLanguages } from "../lib/amt-api";
+import { synthesizeSpeech, translate, getLanguages, type TranslateEngine } from "../lib/amt-api";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
+import EngineToggle from "./EngineToggle";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
 import { useVoice } from "../context/VoiceContext";
@@ -170,6 +171,7 @@ export default function TextToSpeech() {
   const [elapsed, setElapsed] = useState(0);          // seconds since generation started
   const [inputLang, setInputLang] = useState("en");
   const [outputLang, setOutputLang] = useState("en");
+  const [engine, setEngine] = useState<TranslateEngine>("qwen");
   const [availableLangs, setAvailableLangs] = useState<string[]>(Object.keys(LANGUAGES));
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -271,7 +273,7 @@ export default function TextToSpeech() {
           const translationTimeout = new Promise<never>((_, reject) =>
             setTimeout(() => reject(new Error("Translation timeout")), TRANSLATION_TIMEOUT)
           );
-          const res = await Promise.race([translate(text, inputLang, outputLang), translationTimeout]);
+          const res = await Promise.race([translate(text, inputLang, outputLang, engine), translationTimeout]);
           speakText = res.translated_text;
           setTranslatedText(speakText);
           proc.nextStage(`Translated → "${speakText.slice(0, 60)}${speakText.length > 60 ? "…" : ""}"`);
@@ -408,6 +410,13 @@ export default function TextToSpeech() {
           </button>
         </div>
       </div>
+
+      {/* Translation engine — used only when input and output languages differ */}
+      {inputLang !== outputLang && (
+        <div style={{ marginBottom: 8 }}>
+          <EngineToggle value={engine} onChange={setEngine} disabled={generating || isTranslating} label="Translation engine" />
+        </div>
+      )}
 
       {/* Text Input */}
       <div>
@@ -622,7 +631,7 @@ export default function TextToSpeech() {
             setInputLang(lang);
             if (text.trim() && prevLang !== lang) {
               setIsTranslating(true);
-              translate(text, prevLang, lang)
+              translate(text, prevLang, lang, engine)
                 .then((res) => setText(res.translated_text))
                 .catch(() => {})
                 .finally(() => setIsTranslating(false));

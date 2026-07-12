@@ -327,6 +327,8 @@ export interface RealtimeConfig {
   tenantName?: string;
   sampleRate?: number;
   whisperModel?: string;  // faster-whisper size, e.g. "large-v3-turbo"
+  /** Translation engine — "qwen" (commercial-safe, default) or "nllb" (faster). */
+  engine?: TranslateEngine;
 }
 
 export interface AcousticModels {
@@ -394,6 +396,7 @@ export function openRealtimeSession(
       voice_name: config.voiceName || "",
       sample_rate: config.sampleRate || 16000,
       whisper_model: config.whisperModel || null,
+      translate_engine: config.engine || "qwen",
     }));
   };
 
@@ -513,21 +516,30 @@ function patchWavHeader(chunks: Uint8Array[]): Blob {
 
 // ─── Translator ───────────────────────────────────────────────────────────────
 
+/**
+ * Translation engine. "qwen" is commercial-safe (Apache-2.0) and the default;
+ * "nllb" (NLLB-200) is faster but non-commercial (CC-BY-NC).
+ */
+export type TranslateEngine = "qwen" | "nllb";
+
 export interface TranslateResult {
   translated_text: string;
   src_lang: string;
   tgt_lang: string;
+  /** Which engine actually produced the translation (qwen may fall back to nllb). */
+  engine_used?: TranslateEngine;
 }
 
 export async function translate(
   text: string,
   srcLang: string,
-  tgtLang: string
+  tgtLang: string,
+  engine: TranslateEngine = "qwen",
 ): Promise<TranslateResult> {
   const res = await fetch(`${AMT_BASE}/amt/v1/translate`, {
     method: "POST",
     headers: amtHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ text, src_lang: srcLang, tgt_lang: tgtLang }),
+    body: JSON.stringify({ text, src_lang: srcLang, tgt_lang: tgtLang, engine }),
     credentials: "include",
   });
   await handleQuotaError(res);

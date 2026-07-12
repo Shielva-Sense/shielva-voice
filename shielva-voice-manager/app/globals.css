@@ -975,6 +975,62 @@ body {
 }
 
 /* ═══════════════════════════════════════════════════════════
+   ENGINE TOGGLE (segmented control) — translation engine picker
+   ═══════════════════════════════════════════════════════════ */
+
+.vm-engine-toggle {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--surface-subtle);
+  border: 1px solid var(--border-subtle);
+}
+
+.vm-engine-toggle-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  line-height: 1.2;
+  transition: background 0.12s var(--ease-smooth), color 0.12s var(--ease-smooth), border-color 0.12s var(--ease-smooth);
+}
+
+.vm-engine-toggle-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.vm-engine-toggle-btn.is-active {
+  background: var(--bamboo-glow);
+  border-color: var(--bamboo-500);
+  color: var(--accent);
+}
+
+.vm-engine-toggle-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.vm-engine-toggle-hint {
+  font-size: 9px;
+  letter-spacing: 0.02em;
+  opacity: 0.85;
+}
+
+.vm-engine-toggle-note {
+  margin-top: 6px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+
+/* ═══════════════════════════════════════════════════════════
    RESULT BLOCKS
    ═══════════════════════════════════════════════════════════ */
 

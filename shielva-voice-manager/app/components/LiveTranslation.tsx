@@ -4,11 +4,12 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Mic, MicOff, Radio, Square, Volume2, FolderOpen, X, Download, Play, Pause, ChevronRight, RefreshCw } from "lucide-react";
 import { notify } from "../lib/toast";
-import { transcribe, translate, synthesizeSpeech, saveLiveTranslationClip, getLiveTranslationClips } from "../lib/amt-api";
+import { transcribe, translate, synthesizeSpeech, saveLiveTranslationClip, getLiveTranslationClips, type TranslateEngine } from "../lib/amt-api";
 import { recordMic } from "../lib/audio-utils";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
 import UsageIndicator from "./UsageIndicator";
+import EngineToggle from "./EngineToggle";
 import {
   saveClipIDB,
   loadAllClipsIDB,
@@ -246,6 +247,7 @@ function revokeBlobUrl(url: string) { URL.revokeObjectURL(url); blobUrlRegistry.
 export default function LiveTranslation() {
   const [srcLang, setSrcLang]     = useState("en");
   const [tgtLang, setTgtLang]     = useState("hi");
+  const [engine, setEngine]       = useState<TranslateEngine>("qwen");
   const [running, setRunning]     = useState(false);
   const [pipeState, setPipeState] = useState<PipelineState>({ recording: false, processing: 0, playing: false });
   const [level, setLevel]         = useState(0);
@@ -355,7 +357,7 @@ export default function LiveTranslation() {
 
   // ── Process one chunk ─────────────────────────────────────────────────────
   const processChunk = useCallback(async (
-    audioBlob: Blob, chunkId: number, src: string, tgt: string,
+    audioBlob: Blob, chunkId: number, src: string, tgt: string, eng: TranslateEngine,
   ): Promise<boolean> => {
     if (cancelledRef.current) return false;
     setPipeState((s) => ({ ...s, processing: s.processing + 1 }));
@@ -380,11 +382,11 @@ export default function LiveTranslation() {
       let translatedText = "";
       try {
         const effectiveSrc = detectedLang !== tgt ? detectedLang : src;
-        const r = await translate(transcript, effectiveSrc, tgt);
+        const r = await translate(transcript, effectiveSrc, tgt, eng);
         translatedText = r.translated_text;
       } catch (err: any) {
         if (err?.quota) { notify.quotaExceeded(err.quota); return false; }
-        notify.serviceOffline("Qwen Translator");
+        notify.serviceOffline(eng === "qwen" ? "Qwen Translator" : "NLLB Translator");
         return false;
       }
 
@@ -515,7 +517,7 @@ export default function LiveTranslation() {
         setChunkCount((c) => c + 1);
         const src = srcLang;
         const tgt = tgtLang;
-        processChunk(audioBlob, chunkId, src, tgt).catch(() => {});
+        processChunk(audioBlob, chunkId, src, tgt, engine).catch(() => {});
         proc.nextStage(`Chunk ${chunkId} recorded, processing...`);
       }
     } finally {
@@ -524,7 +526,7 @@ export default function LiveTranslation() {
       setLevel(0); setElapsed(0);
       proc.complete("Live translation stopped");
     }
-  }, [srcLang, tgtLang, proc, recordChunk, processChunk]);
+  }, [srcLang, tgtLang, engine, proc, recordChunk, processChunk]);
 
   const stop = useCallback(() => {
     cancelledRef.current = true;
@@ -551,7 +553,7 @@ export default function LiveTranslation() {
         <div className="vm-card-icon"><Radio size={18} strokeWidth={2} /></div>
         <div>
           <div className="vm-card-title">Live Voice Translation</div>
-          <div className="vm-card-subtitle">faster-whisper (auto-detect) → Qwen → IndicF5 · {CHUNK_SEC}s chunks</div>
+          <div className="vm-card-subtitle">faster-whisper (auto-detect) → {engine === "qwen" ? "Qwen" : "NLLB"} → IndicF5 · {CHUNK_SEC}s chunks</div>
         </div>
         <UsageIndicator resource="both" />
       </div>
@@ -570,6 +572,11 @@ export default function LiveTranslation() {
             {Object.entries(LANG_NAMES).map(([c, n]) => <option key={c} value={c}>{n}</option>)}
           </select>
         </div>
+      </div>
+
+      {/* Translation engine */}
+      <div style={{ marginBottom: 12 }}>
+        <EngineToggle value={engine} onChange={setEngine} disabled={running} label="Engine" />
       </div>
 
       {/* Mic level */}

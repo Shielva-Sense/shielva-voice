@@ -3,13 +3,14 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Radio, Mic, Square, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge } from "lucide-react";
-import { listVoices, openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, type VoiceInfo, type RealtimeEvent } from "../lib/amt-api";
+import { listVoices, openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, type VoiceInfo, type RealtimeEvent, type TranslateEngine } from "../lib/amt-api";
 import { saveClipIDB, loadAllClipsIDB, updateClipCloud, bufferToUrl, type StoredClip } from "../lib/live-translation-store";
 import { useAuth } from "../context/AuthContext";
 import { useVoice } from "../context/VoiceContext";
 import { useVoices } from "../hooks/useVoices";
 import { useStorage } from "../context/StorageContext";
 import LanguageSelect, { type LangOption } from "./LanguageSelect";
+import EngineToggle from "./EngineToggle";
 
 // ─── Language map ─────────────────────────────────────────────────────────────
 // IndicF5 renders both Indian and international scripts zero-shot; the grouping
@@ -560,6 +561,7 @@ export default function RealTimeVoice() {
   const [voiceId, setVoiceId]     = useState("");
   const [srcLang, setSrcLang]     = useState("en");
   const [tgtLang, setTgtLang]     = useState("hi");
+  const [engine, setEngine]       = useState<TranslateEngine>("qwen");
   const [active, setActive]       = useState(false);
   const [status, setStatus]       = useState<"idle" | "connecting" | "ready" | "error">("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -759,6 +761,7 @@ export default function RealTimeVoice() {
         voiceId: voiceId || "",
         sampleRate: SAMPLE_RATE,
         whisperModel,
+        engine,
       },
       handleEvent,
       isAuthenticated ? user?.tenants?.[0] : undefined,
@@ -813,7 +816,7 @@ export default function RealTimeVoice() {
     }
 
     setActive(true);
-  }, [active, srcLang, tgtLang, voiceId, whisperModel, handleEvent, isAuthenticated, user, useWorklet, sendFloat32Chunk]);
+  }, [active, srcLang, tgtLang, voiceId, whisperModel, engine, handleEvent, isAuthenticated, user, useWorklet, sendFloat32Chunk]);
 
   const stopSession = useCallback(() => {
     wsRef.current?.close();
@@ -856,7 +859,7 @@ export default function RealTimeVoice() {
         </div>
         <div>
           <div className="vm-card-title">Real-Time Voice Translation</div>
-          <div className="vm-card-subtitle">VAD → faster-whisper → Qwen → IndicF5</div>
+          <div className="vm-card-subtitle">VAD → faster-whisper → {engine === "qwen" ? "Qwen" : "NLLB"} → IndicF5</div>
         </div>
         {active && (
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -910,6 +913,12 @@ export default function RealTimeVoice() {
             ? "Zero-shot clone of your reference — no training needed."
             : "Built-in IndicF5 reference. Pick a Voice Library entry to clone your own."}
         </div>
+      </div>
+
+      {/* Translation engine */}
+      <div style={{ marginBottom: 10 }}>
+        <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Engine</div>
+        <EngineToggle value={engine} onChange={setEngine} disabled={active} />
       </div>
 
       {/* Mic energy bar */}

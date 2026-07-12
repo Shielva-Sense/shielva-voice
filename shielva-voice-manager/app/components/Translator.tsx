@@ -3,11 +3,12 @@
 import { useState, useEffect, useMemo } from "react";
 import { Languages, ArrowRightLeft } from "lucide-react";
 import { notify } from "../lib/toast";
-import { translate, getLanguages } from "../lib/amt-api";
+import { translate, getLanguages, type TranslateEngine } from "../lib/amt-api";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
 import UsageIndicator from "./UsageIndicator";
 import LanguageSelect, { type LangOption } from "./LanguageSelect";
+import EngineToggle from "./EngineToggle";
 
 const PUBLIC_MAX_CHARS = Number(process.env.NEXT_PUBLIC_PUBLIC_MAX_TEXT_CHARS || "100");
 
@@ -78,6 +79,7 @@ export default function Translator() {
   const [tgtLang, setTgtLang] = useState("hi");
   const [srcText, setSrcText] = useState("");
   const [tgtText, setTgtText] = useState("");
+  const [engine, setEngine] = useState<TranslateEngine>("qwen");
   const [translating, setTranslating] = useState(false);
   const proc = useProcessing();
   const { isAuthenticated, refreshUsage } = useAuth();
@@ -97,7 +99,7 @@ export default function Translator() {
     try {
       proc.addLog(`Translating ${LANG_META[srcLang]?.label || srcLang} → ${LANG_META[tgtLang]?.label || tgtLang}...`);
       proc.nextStage();
-      const res = await translate(srcText, srcLang, tgtLang);
+      const res = await translate(srcText, srcLang, tgtLang, engine);
       setTgtText(res.translated_text);
       proc.nextStage();
       proc.complete("Translation complete");
@@ -107,7 +109,7 @@ export default function Translator() {
       if (err?.quota) {
         notify.quotaExceeded(err.quota);
       } else {
-        notify.serviceOffline("Qwen Translator");
+        notify.serviceOffline(engine === "qwen" ? "Qwen Translator" : "NLLB Translator");
       }
     } finally {
       setTranslating(false);
@@ -141,7 +143,7 @@ export default function Translator() {
         </div>
         <div>
           <div className="vm-card-title">Translation</div>
-          <div className="vm-card-subtitle">Qwen 7B &middot; {displayLangs.length} languages</div>
+          <div className="vm-card-subtitle">{engine === "qwen" ? "Qwen 7B" : "NLLB-200"} &middot; {displayLangs.length} languages</div>
         </div>
         <UsageIndicator resource="text" />
       </div>
@@ -171,6 +173,11 @@ export default function Translator() {
             placeholder="Target language"
           />
         </div>
+      </div>
+
+      {/* Translation engine */}
+      <div style={{ marginBottom: 12 }}>
+        <EngineToggle value={engine} onChange={setEngine} disabled={translating} label="Engine" />
       </div>
 
       {/* Source text */}
