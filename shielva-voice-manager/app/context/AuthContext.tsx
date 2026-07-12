@@ -158,18 +158,58 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const login = () => redirectToLogin();
 
     const logout = async () => {
-        // 1. Fire R2 cache purge for this tenant (best-effort, non-blocking)
-        //    Removes synthesis cache + public session voice uploads from R2.
+        // Mirrors shielva-arc's performLogout(). The previous version only purged
+        // the R2 cache and cleared local React state, then redirected — it NEVER
+        // revoked the server session, so the shielva_sso cookie stayed valid and
+        // validateSession logged the user straight back in. Real logout = revoke
+        // the server session cookie + cross-app sync + expire readable cookies.
+
+        // 1. R2 cache purge for this tenant (voice-manager specific; best-effort).
         fetch(`${API_BASE}/amt/v1/session/logout`, {
             method: 'POST',
             credentials: 'include',
         }).catch(() => { /* non-fatal */ });
 
+        // 2. Server-side session revoke — clears the HttpOnly shielva_sso cookie via
+        //    Set-Cookie. THIS is what actually ends the session (was missing).
+        try {
+            const csrf = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)?.[1];
+            const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+            if (csrf) headers['X-CSRF-Token'] = decodeURIComponent(csrf);
+            await fetch(`${API_BASE}/identity/api/v1/unified/logout`, {
+                method: 'POST',
+                credentials: 'include',
+                headers,
+            });
+        } catch { /* non-fatal — client-side clear below still runs */ }
+
+        // 3. Cross-app logout sync (fleet-wide), like ARC. Best-effort, non-blocking.
+        fetch(`${API_BASE}/bots/trigger-logout`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { 'Content-Type': 'application/json' },
+        }).catch(() => { /* non-blocking */ });
+
+        // 4. Clear local state + force-expire readable SSO/CSRF cookies (belt-and-
+        //    suspenders; the HttpOnly cookie is cleared by the server Set-Cookie above,
+        //    but on the shared .shielva.ai registrable domain we clear that variant too).
         userRef.current = null;
         setAmtAuthState(false);
         setUser(null);
         setUsageInfo(null);
         setSessionRejected(false);
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('amt_public_session_id');
+            const expiry = 'expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;';
+            const host = window.location.hostname;
+            const cookieDomain = host === 'localhost' ? 'localhost' : '.' + host.split('.').slice(-2).join('.');
+            document.cookie = `shielva_sso=; ${expiry}`;
+            document.cookie = `shielva_sso=; ${expiry} domain=${cookieDomain};`;
+            document.cookie = `csrf_token=; ${expiry}`;
+            document.cookie = `csrf_token=; ${expiry} domain=${cookieDomain};`;
+        }
+
+        // 5. Back to the login gate.
         window.location.replace('/login');
     };
 
