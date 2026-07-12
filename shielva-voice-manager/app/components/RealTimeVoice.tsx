@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Radio, Mic, Square, Waves, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge } from "lucide-react";
+import { Radio, Mic, Square, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge } from "lucide-react";
 import { listVoices, openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, type VoiceInfo, type RealtimeEvent } from "../lib/amt-api";
 import { saveClipIDB, loadAllClipsIDB, updateClipCloud, bufferToUrl, type StoredClip } from "../lib/live-translation-store";
 import { useAuth } from "../context/AuthContext";
@@ -12,8 +12,8 @@ import { useStorage } from "../context/StorageContext";
 import LanguageSelect, { type LangOption } from "./LanguageSelect";
 
 // ─── Language map ─────────────────────────────────────────────────────────────
-// Indian regional first (Indic-TTS / Edge TTS with Indian neural voices)
-// International second (XTTS v2 for cloned voices, Edge TTS for natural)
+// IndicF5 renders both Indian and international scripts zero-shot; the grouping
+// below is purely for the language picker's ordering.
 const LANGUAGES: Record<string, { name: string; flag: string; group: "indian" | "international" }> = {
   // Indian
   hi: { name: "Hindi",      flag: "🇮🇳", group: "indian" },
@@ -44,11 +44,6 @@ const LANGUAGES: Record<string, { name: string; flag: string; group: "indian" | 
   tr: { name: "Turkish",    flag: "🇹🇷", group: "international" },
   pl: { name: "Polish",     flag: "🇵🇱", group: "international" },
 };
-
-// Indian language codes — use Edge TTS neural voices, skip XTTS v2 (not supported)
-const INDIAN_LANG_CODES = new Set(
-  Object.entries(LANGUAGES).filter(([, v]) => v.group === "indian").map(([k]) => k)
-);
 
 const SAMPLE_RATE    = 16000;   // 16 kHz mono — Silero VAD requirement
 const CHUNK_SAMPLES  = 1024;    // 64 ms @ 16 kHz — good balance of latency vs network overhead
@@ -565,11 +560,6 @@ export default function RealTimeVoice() {
   const [voiceId, setVoiceId]     = useState("");
   const [srcLang, setSrcLang]     = useState("en");
   const [tgtLang, setTgtLang]     = useState("hi");
-  // voiceMode: "natural" = Edge TTS / Indic-TTS (fast, no cloning)
-  //            "cloned"  = VITS+RVC or Edge TTS+RVC (user chooses engine)
-  const [voiceMode, setVoiceMode] = useState<"natural" | "cloned">("natural");
-  const [ttsEngine, setTtsEngine] = useState<"edge_tts" | "vits" | "indicf5">("edge_tts");
-  const [gender, setGender]       = useState<"male" | "female">("female");
   const [active, setActive]       = useState(false);
   const [status, setStatus]       = useState<"idle" | "connecting" | "ready" | "error">("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -594,7 +584,7 @@ export default function RealTimeVoice() {
   const energyRef    = useRef<number>(0);
   const vadTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const { user, isAuthenticated } = useAuth();
-  const { voices, trainedVoices } = useVoices();
+  const { voices } = useVoices();
   const { canUseFeature, openModal: openStorageModal } = useStorage();
   const storageAccess = canUseFeature("voice");
 
@@ -672,25 +662,16 @@ export default function RealTimeVoice() {
     return () => { if (vadTimerRef.current) clearInterval(vadTimerRef.current); };
   }, [active]);
 
-  // Derived: for Indian target languages, force natural mode when no trained voice
-  const effectiveVoiceMode = INDIAN_LANG_CODES.has(tgtLang) && !voiceId ? "natural" : voiceMode;
-
   // Computed options for LanguageSelect
   const rtLangOptions: LangOption[] = Object.entries(LANGUAGES).map(([k, v]) => ({
     value: k, label: v.name, flag: v.flag, group: v.group,
   }));
-  // XTTS supports these international languages natively
-  const xttsSupported = !INDIAN_LANG_CODES.has(tgtLang);
 
   // Handle WebSocket events
   const handleEvent = useCallback((event: RealtimeEvent) => {
     if (event.type === "ready") {
       setStatus("ready");
-      setStatusMsg(
-        event.fast_mode
-          ? `⚡ Live — ${LANGUAGES[tgtLang]?.flag ?? ""} ${LANGUAGES[tgtLang]?.name ?? tgtLang}`
-          : `🎙 Listening — ${LANGUAGES[tgtLang]?.name ?? tgtLang}`,
-      );
+      setStatusMsg(`Live — ${LANGUAGES[tgtLang]?.flag ?? ""} ${LANGUAGES[tgtLang]?.name ?? tgtLang}`);
     } else if (event.type === "audio" && event.wav_b64) {
       const bytes = Uint8Array.from(atob(event.wav_b64), (c) => c.charCodeAt(0));
       const blob  = new Blob([bytes], { type: "audio/wav" });
@@ -769,18 +750,14 @@ export default function RealTimeVoice() {
     }
     streamRef.current = stream;
 
-    // 2. WebSocket session — pass voice_mode so backend routes correctly
-    const effectiveTtsEngine = INDIAN_LANG_CODES.has(tgtLang) ? ttsEngine : "auto";
+    // 2. WebSocket session — IndicF5 clones from the selected voice (or the default
+    //    reference when none is chosen).
     const session = openRealtimeSession(
       {
         srcLang,
         tgtLang,
         voiceId: voiceId || "",
-        fastMode: effectiveVoiceMode === "natural",
         sampleRate: SAMPLE_RATE,
-        voiceMode: effectiveVoiceMode,
-        ttsEngine: effectiveTtsEngine,
-        gender,
         whisperModel,
       },
       handleEvent,
@@ -836,7 +813,7 @@ export default function RealTimeVoice() {
     }
 
     setActive(true);
-  }, [active, srcLang, tgtLang, voiceId, effectiveVoiceMode, ttsEngine, gender, handleEvent, isAuthenticated, user, useWorklet, sendFloat32Chunk]);
+  }, [active, srcLang, tgtLang, voiceId, whisperModel, handleEvent, isAuthenticated, user, useWorklet, sendFloat32Chunk]);
 
   const stopSession = useCallback(() => {
     wsRef.current?.close();
@@ -863,21 +840,6 @@ export default function RealTimeVoice() {
 
   useEffect(() => () => stopSession(), []);
 
-  // Reset indicf5 → edge_tts when switching away from Indian
-  useEffect(() => {
-    if (!INDIAN_LANG_CODES.has(tgtLang) && ttsEngine === "indicf5") setTtsEngine("edge_tts");
-  }, [tgtLang]);
-
-  // Determine TTS engine label for info footer
-  const engineLabel = effectiveVoiceMode === "natural"
-    ? INDIAN_LANG_CODES.has(tgtLang) ? "Edge TTS (Indian neural)" : "Edge TTS neural"
-    : ttsEngine === "indicf5" ? "IndicF5"
-    : ttsEngine === "vits" ? "VITS + RVC"
-    : "Edge TTS + RVC";
-
-  // Trained voices available for cloned mode
-  // trainedVoices comes from useVoices() above
-
   return (
     <div className="vm-card">
       {!storageAccess.allowed && (
@@ -894,7 +856,7 @@ export default function RealTimeVoice() {
         </div>
         <div>
           <div className="vm-card-title">Real-Time Voice Translation</div>
-          <div className="vm-card-subtitle">VAD → ASR → Translate → TTS → RVC</div>
+          <div className="vm-card-subtitle">VAD → faster-whisper → Qwen → IndicF5</div>
         </div>
         {active && (
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -932,166 +894,23 @@ export default function RealTimeVoice() {
         </div>
       </div>
 
-      {/* Voice mode toggle */}
-      <div style={{ display: "flex", gap: 6, marginBottom: 10 }}>
-        <button
-          onClick={() => setVoiceMode("natural")}
-          disabled={active}
-          style={{
-            flex: 1,
-            padding: "6px 0",
-            fontSize: 11,
-            borderRadius: 6,
-            border: `1px solid ${effectiveVoiceMode === "natural" ? "rgba(74,222,128,0.5)" : "var(--border-subtle)"}`,
-            background: effectiveVoiceMode === "natural" ? "rgba(74,222,128,0.1)" : "transparent",
-            color: effectiveVoiceMode === "natural" ? "#4ade80" : "var(--text-muted)",
-            cursor: active ? "default" : "pointer",
-            fontWeight: effectiveVoiceMode === "natural" ? 600 : 400,
-          }}
-        >
-          <Waves size={12} strokeWidth={2} style={{ display: "inline", verticalAlign: "middle", marginRight: 4 }} /> Natural
-          <div style={{ fontSize: 9, opacity: 0.65, marginTop: 1 }}>
-            {INDIAN_LANG_CODES.has(tgtLang) ? "Indian neural" : "Edge TTS"} · ~1s
-          </div>
-        </button>
-        <button
-          onClick={() => setVoiceMode("cloned")}
-          disabled={active || (trainedVoices.length === 0 && !(INDIAN_LANG_CODES.has(tgtLang) && ttsEngine === "indicf5"))}
-          title={trainedVoices.length === 0 && !(INDIAN_LANG_CODES.has(tgtLang) && ttsEngine === "indicf5") ? "Train a voice first (or select IndicF5 for Indian languages — no training needed)" : undefined}
-          style={{
-            flex: 1,
-            padding: "6px 0",
-            fontSize: 11,
-            borderRadius: 6,
-            border: `1px solid ${effectiveVoiceMode === "cloned" ? "rgba(167,139,250,0.5)" : "var(--border-subtle)"}`,
-            background: effectiveVoiceMode === "cloned" ? "rgba(167,139,250,0.1)" : "transparent",
-            color: effectiveVoiceMode === "cloned" ? "#a78bfa" : "var(--text-faint)",
-            cursor: (active || (trainedVoices.length === 0 && !(INDIAN_LANG_CODES.has(tgtLang) && ttsEngine === "indicf5"))) ? "default" : "pointer",
-            fontWeight: effectiveVoiceMode === "cloned" ? 600 : 400,
-            opacity: (trainedVoices.length === 0 && !(INDIAN_LANG_CODES.has(tgtLang) && ttsEngine === "indicf5")) ? 0.5 : 1,
-          }}
-        >
-          🎙 Cloned
-          <div style={{ fontSize: 9, opacity: 0.65, marginTop: 1 }}>
-            {ttsEngine === "indicf5" ? "IndicF5" : ttsEngine === "vits" ? "VITS+RVC" : "Edge TTS+RVC"} · ~3–5s
-          </div>
-        </button>
+      {/* Voice selector — IndicF5 clones the chosen reference (zero-shot, no training) */}
+      <div style={{ marginBottom: 10 }}>
+        <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Voice</div>
+        <select className="vm-select" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={active} style={{ fontSize: 12 }}>
+          <option value="">Default IndicF5 voice</option>
+          {voices.map((v) => (
+            <option key={v.voice_id} value={v.voice_id}>
+              {v.name || v.voice_id}{v.language ? ` (${v.language.toUpperCase()})` : ""}
+            </option>
+          ))}
+        </select>
+        <div style={{ fontSize: 9, color: "var(--text-faint)", marginTop: 3, paddingLeft: 2 }}>
+          {voiceId
+            ? "Zero-shot clone of your reference — no training needed."
+            : "Built-in IndicF5 reference. Pick a Voice Library entry to clone your own."}
+        </div>
       </div>
-
-      {/* Gender selector — shown in natural mode only */}
-      {effectiveVoiceMode === "natural" && (
-        <div style={{ marginBottom: 10, display: "flex", alignItems: "center", gap: 8 }}>
-          <span style={{ fontSize: 11, color: "var(--text-muted)" }}>Gender</span>
-          <button
-            onClick={() => setGender("female")}
-            disabled={active}
-            style={{
-              padding: "4px 10px", fontSize: 10, borderRadius: 5, cursor: active ? "default" : "pointer",
-              border: `1px solid ${gender === "female" ? "rgba(74,222,128,0.5)" : "var(--border-subtle)"}`,
-              background: gender === "female" ? "rgba(74,222,128,0.08)" : "transparent",
-              color: gender === "female" ? "#4ade80" : "var(--text-muted)",
-              fontWeight: gender === "female" ? 600 : 400,
-            }}
-          >Female</button>
-          <button
-            onClick={() => setGender("male")}
-            disabled={active}
-            style={{
-              padding: "4px 10px", fontSize: 10, borderRadius: 5, cursor: active ? "default" : "pointer",
-              border: `1px solid ${gender === "male" ? "rgba(74,222,128,0.5)" : "var(--border-subtle)"}`,
-              background: gender === "male" ? "rgba(74,222,128,0.08)" : "transparent",
-              color: gender === "male" ? "#4ade80" : "var(--text-muted)",
-              fontWeight: gender === "male" ? 600 : 400,
-            }}
-          >Male</button>
-        </div>
-      )}
-
-      {/* TTS Engine toggle — shown in cloned mode */}
-      {effectiveVoiceMode === "cloned" && (
-        <div style={{ marginBottom: 10 }}>
-          <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>TTS Engine</div>
-          <div style={{ display: "flex", gap: 6 }}>
-            <button
-              onClick={() => setTtsEngine("edge_tts")}
-              disabled={active}
-              style={{
-                flex: 1, padding: "5px 0", fontSize: 10, borderRadius: 5, cursor: active ? "default" : "pointer",
-                border: `1px solid ${ttsEngine === "edge_tts" ? "rgba(74,222,128,0.5)" : "var(--border-subtle)"}`,
-                background: ttsEngine === "edge_tts" ? "rgba(74,222,128,0.08)" : "transparent",
-                color: ttsEngine === "edge_tts" ? "#4ade80" : "var(--text-muted)",
-                fontWeight: ttsEngine === "edge_tts" ? 600 : 400,
-              }}
-              title="Edge TTS → RVC voice conversion — fast, requires trained model"
-            >
-              Edge TTS
-            </button>
-            <button
-              onClick={() => setTtsEngine("vits")}
-              disabled={active}
-              style={{
-                flex: 1, padding: "5px 0", fontSize: 10, borderRadius: 5, cursor: active ? "default" : "pointer",
-                border: `1px solid ${ttsEngine === "vits" ? "rgba(167,139,250,0.5)" : "var(--border-subtle)"}`,
-                background: ttsEngine === "vits" ? "rgba(167,139,250,0.08)" : "transparent",
-                color: ttsEngine === "vits" ? "#a78bfa" : "var(--text-muted)",
-                fontWeight: ttsEngine === "vits" ? 600 : 400,
-              }}
-              title="VITS → RVC: higher quality voice cloning, requires trained model"
-            >
-              VITS
-            </button>
-            {INDIAN_LANG_CODES.has(tgtLang) && (
-              <button
-                onClick={() => setTtsEngine("indicf5")}
-                disabled={active}
-                style={{
-                  flex: 1, padding: "5px 0", fontSize: 10, borderRadius: 5, cursor: active ? "default" : "pointer",
-                  border: `1px solid ${ttsEngine === "indicf5" ? "rgba(251,191,36,0.5)" : "var(--border-subtle)"}`,
-                  background: ttsEngine === "indicf5" ? "rgba(251,191,36,0.08)" : "transparent",
-                  color: ttsEngine === "indicf5" ? "#fbbf24" : "var(--text-muted)",
-                  fontWeight: ttsEngine === "indicf5" ? 600 : 400,
-                }}
-                title="IndicF5 zero-shot Indian cloning — no training needed; GPU recommended"
-              >
-                IndicF5
-              </button>
-            )}
-          </div>
-          {ttsEngine === "indicf5" && (
-            <div style={{ fontSize: 9, color: "#f59e0b", marginTop: 3, paddingLeft: 2 }}>
-              IndicF5 requires GPU for real-time — expect delays on CPU
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Voice selector (cloned mode only) */}
-      {effectiveVoiceMode === "cloned" && (
-        <div style={{ marginBottom: 10 }}>
-          <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>
-            {INDIAN_LANG_CODES.has(tgtLang) && ttsEngine === "indicf5" ? "Voice (zero-shot ref)" : "Trained voice"}
-          </div>
-          {INDIAN_LANG_CODES.has(tgtLang) && ttsEngine === "indicf5" ? (
-            <select className="vm-select" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={active} style={{ fontSize: 12 }}>
-              <option value="">Default IndicF5 voice</option>
-              {voices.map((v) => (
-                <option key={v.voice_id} value={v.voice_id}>
-                  🎙 {v.name || v.voice_id}{v.language ? ` (${v.language.toUpperCase()})` : ""}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <select className="vm-select" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={active} style={{ fontSize: 12 }}>
-              <option value="">Select trained voice…</option>
-              {trainedVoices.map((v) => (
-                <option key={v.voice_id} value={v.voice_id}>
-                  {v.name || v.voice_id}{v.language ? ` (${v.language.toUpperCase()})` : ""}
-                </option>
-              ))}
-            </select>
-          )}
-        </div>
-      )}
 
       {/* Mic energy bar */}
       {active && (
@@ -1337,11 +1156,7 @@ export default function RealTimeVoice() {
 
       {/* Info footer */}
       <div className="vm-info" style={{ marginTop: 10 }}>
-        Silero VAD → ASR → NLLB translate → <strong>
-          {INDIAN_LANG_CODES.has(tgtLang) && effectiveVoiceMode === "cloned" && ttsEngine === "indicf5"
-            ? "IndicF5 zero-shot"
-            : engineLabel}
-        </strong>.
+        Silero VAD → faster-whisper → Qwen translate → <strong>IndicF5 zero-shot</strong>.
         {" "}AudioWorklet runs in a dedicated thread for glitch-free capture.
       </div>
 

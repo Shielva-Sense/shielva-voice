@@ -175,7 +175,7 @@ export default function Home() {
         </h1>
         <p>
           Real-time speech recognition, voice cloning, neural translation, and intent
-          detection — powered by Whisper, Shielva TTS, HiFi-GAN, and NLLB.
+          detection — powered by faster-whisper, IndicF5, and Qwen.
         </p>
         {!isAuthenticated && !isLoading && (
           <p className="vm-hero-trial-note">
@@ -202,7 +202,7 @@ export default function Home() {
 
       {/* ─── Footer ─── */}
       <footer className="vm-footer">
-        Shielva Voice-AMT Engine v1.0 &middot; 7 Neural Services &middot; Multi-Tenant
+        Shielva Voice-AMT Engine v1.0 &middot; {SERVICES.length} Neural Services &middot; Multi-Tenant
       </footer>
 
       <style>{`

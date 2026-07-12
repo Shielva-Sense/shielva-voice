@@ -68,7 +68,7 @@ const LANG_META: Record<string, LangMeta> = {
 
 const TRANSLATE_STAGES = [
   { label: "Preparing translation...", percent: 15 },
-  { label: "Translating via NLLB-200...", percent: 50 },
+  { label: "Translating via Qwen...", percent: 50 },
   { label: "Formatting output...", percent: 90 },
 ];
 
@@ -107,7 +107,7 @@ export default function Translator() {
       if (err?.quota) {
         notify.quotaExceeded(err.quota);
       } else {
-        notify.serviceOffline("NLLB-200 Translator");
+        notify.serviceOffline("Qwen Translator");
       }
     } finally {
       setTranslating(false);
@@ -141,7 +141,7 @@ export default function Translator() {
         </div>
         <div>
           <div className="vm-card-title">Translation</div>
-          <div className="vm-card-subtitle">NLLB-200 &middot; {displayLangs.length} languages</div>
+          <div className="vm-card-subtitle">Qwen 7B &middot; {displayLangs.length} languages</div>
         </div>
         <UsageIndicator resource="text" />
       </div>

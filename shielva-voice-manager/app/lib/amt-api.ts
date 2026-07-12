@@ -51,9 +51,7 @@ function amtHeaders(extra?: Record<string, string>): Record<string, string> {
 
 const ACOUSTIC = process.env.NEXT_PUBLIC_AMT_ACOUSTIC_URL || "https://localhost:8200";
 const INTENT = process.env.NEXT_PUBLIC_AMT_INTENT_URL || "https://localhost:8201";
-const SPEAKER = process.env.NEXT_PUBLIC_AMT_SPEAKER_URL || "https://localhost:8202";
-const SHIELVA_TTS = process.env.NEXT_PUBLIC_AMT_TTS_URL || "https://localhost:8203";
-const VOCODER = process.env.NEXT_PUBLIC_AMT_VOCODER_URL || "https://localhost:8204";
+const INDICF5_TTS = process.env.NEXT_PUBLIC_AMT_TTS_URL || "https://localhost:8203";
 const TRANSLATOR = process.env.NEXT_PUBLIC_AMT_TRANSLATOR_URL || "https://localhost:8205";
 
 // ─── Health ───────────────────────────────────────────────────────────────────
@@ -66,13 +64,15 @@ export interface ServiceHealth {
   detail?: string;
 }
 
+// Live backend services after the IndicF5 migration.
+// Removed: speaker-encoder (resemblyzer) and vocoder (HiFi-GAN) — IndicF5 clones
+// zero-shot from a reference clip, so neither a speaker embedding nor a separate
+// vocoder exists anymore.
 export const SERVICES = [
-  { key: "acoustic", label: "Acoustic", url: ACOUSTIC },
+  { key: "acoustic", label: "Speech-to-Text", url: ACOUSTIC },
   { key: "intent", label: "Intent", url: INTENT },
-  { key: "speaker", label: "Speaker", url: SPEAKER },
-  { key: "shielva-tts", label: "Shielva TTS", url: SHIELVA_TTS },
-  { key: "vocoder", label: "Vocoder", url: VOCODER },
-  { key: "translator", label: "Translator", url: TRANSLATOR },
+  { key: "shielva-tts", label: "Text-to-Speech", url: INDICF5_TTS },
+  { key: "translator", label: "Translation", url: TRANSLATOR },
 ] as const;
 
 export async function checkHealth(baseUrl: string): Promise<{ ok: boolean; loading?: boolean; detail?: string }> {
@@ -85,43 +85,6 @@ export async function checkHealth(baseUrl: string): Promise<{ ok: boolean; loadi
     return { ok: data.status === "ok", detail: data.service };
   } catch {
     return { ok: false, detail: "unreachable" };
-  }
-}
-
-// ─── Engine capabilities (gpu_assist / xtts / indicf5) ───────────────────────
-
-export interface EngineCapabilities {
-  gpu_assist: boolean;
-  engines: {
-    xtts: boolean;
-    vits: boolean;
-    indicf5: boolean;
-    edge_tts: boolean;
-  };
-}
-
-const DEFAULT_ENGINES: EngineCapabilities = {
-  gpu_assist: false,
-  engines: { xtts: false, vits: false, indicf5: false, edge_tts: true },
-};
-
-export async function getEngineCapabilities(): Promise<EngineCapabilities> {
-  // Route through gateway (port 8000) so browser only needs one trusted cert.
-  // Direct fetch to shielva-tts (port 8203) would require the user to accept that cert separately.
-  try {
-    const res = await fetch(`${AMT_BASE}/amt/v1/engines`, {
-      headers: amtHeaders(),
-      credentials: "include",
-      signal: AbortSignal.timeout(6000),
-    });
-    if (!res.ok) return DEFAULT_ENGINES;
-    const data = await res.json();
-    return {
-      gpu_assist: data.gpu_assist ?? false,
-      engines: data.engines ?? DEFAULT_ENGINES.engines,
-    };
-  } catch {
-    return DEFAULT_ENGINES;
   }
 }
 
@@ -162,18 +125,6 @@ export async function transcribe(audioBlob: Blob, language?: string): Promise<Tr
     const err = await res.text();
     throw new Error(`Transcription failed: ${err}`);
   }
-  return res.json();
-}
-
-export async function phonemize(text: string): Promise<{ phonemes: string[] }> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/phonemize`, {
-    method: "POST",
-    headers: amtHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ text }),
-    credentials: "include",
-  });
-  await handleQuotaError(res);
-  if (!res.ok) throw new Error("Phonemization failed");
   return res.json();
 }
 
@@ -370,15 +321,12 @@ export async function getOptimizeStatus(voiceId: string): Promise<{ optimized: b
 export interface RealtimeConfig {
   srcLang: string;
   tgtLang: string;
+  /** Cloned/registered voice for IndicF5. Omit for the default reference. */
   voiceId?: string;
   voiceName?: string;
   tenantName?: string;
-  fastMode?: boolean;
   sampleRate?: number;
-  voiceMode?: "natural" | "cloned";
-  ttsEngine?: string;
-  gender?: "male" | "female";
-  whisperModel?: string;  // "tiny"|"base"|"small"|"medium"|"large-v2"|"large-v3"
+  whisperModel?: string;  // faster-whisper size, e.g. "large-v3-turbo"
 }
 
 export interface AcousticModels {
@@ -444,11 +392,7 @@ export function openRealtimeSession(
       tgt_lang: config.tgtLang,
       voice_id: config.voiceId || "",
       voice_name: config.voiceName || "",
-      fast_mode: config.fastMode !== false,  // default true
       sample_rate: config.sampleRate || 16000,
-      voice_mode: config.voiceMode || "natural",
-      tts_engine: config.ttsEngine || "auto",
-      gender: config.gender || "female",
       whisper_model: config.whisperModel || null,
     }));
   };
@@ -480,24 +424,40 @@ export function openRealtimeSession(
   };
 }
 
-// ─── Shielva TTS (Text-to-Speech) ─────────────────────────────────────────────
+// ─── Text-to-Speech (IndicF5) ─────────────────────────────────────────────────
+//
+// The backend is IndicF5-only (AI4Bharat): zero-shot voice cloning from a ~10s
+// reference clip, handling English and Indian languages. There is no engine
+// selection, no gender, no accent, no phoneme/vocoder pipeline — a single POST
+// returns a finished WAV clip.
 
-export interface SynthesizeResult {
-  /** "mel" = HiFi-GAN vocoder input; "wav" = direct audio, skip vocoder */
-  type?: "mel" | "wav";
-  // mel path
-  mel_data_b64?: string;
-  n_mel?: number;
-  n_frames?: number;
-  // wav path (direct TTS — no vocoder artefacts)
-  wav_data_b64?: string;
+export interface SynthesizeParams {
+  /** Text to speak. IndicF5 renders whatever script it is given. */
+  text: string;
+  /** A registered/cloned voice from the Voice Library. Omit for the default reference. */
+  voiceId?: string;
+  /** Inline base64 reference clip (used instead of a stored voice_id). */
+  voiceAudioB64?: string;
+  /** Transcript of the inline reference clip — improves zero-shot cloning fidelity. */
+  refText?: string;
 }
 
-export async function synthesize(phonemes: string[], voiceId: string, text = ""): Promise<SynthesizeResult> {
+/**
+ * Synthesize speech with IndicF5. Returns a finished WAV blob.
+ *
+ * The server computes the full clip in memory before responding (Content-Length
+ * set), so the resulting blob/data URL supports seek + range in the browser.
+ */
+export async function synthesizeSpeech(params: SynthesizeParams): Promise<Blob> {
+  const body: Record<string, unknown> = { text: params.text };
+  if (params.voiceId) body.voice_id = params.voiceId;
+  if (params.voiceAudioB64) body.voice_audio_b64 = params.voiceAudioB64;
+  if (params.refText) body.ref_text = params.refText;
+
   const res = await fetch(`${AMT_BASE}/amt/v1/synthesize`, {
     method: "POST",
     headers: amtHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ phonemes, voice_id: voiceId, text }),
+    body: JSON.stringify(body),
     credentials: "include",
   });
   await handleQuotaError(res);
@@ -505,7 +465,16 @@ export async function synthesize(phonemes: string[], voiceId: string, text = "")
     const err = await res.text();
     throw new Error(`Synthesis failed: ${err}`);
   }
-  return res.json();
+
+  const reader = res.body!.getReader();
+  const chunks: Uint8Array[] = [];
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    if (value) chunks.push(value);
+  }
+  // Patch the WAV header so RIFF/data sizes match the received bytes.
+  return patchWavHeader(chunks);
 }
 
 /**
@@ -540,469 +509,6 @@ function patchWavHeader(chunks: Uint8Array[]): Blob {
     }
   }
   return new Blob([combined], { type: "audio/wav" });
-}
-
-/**
- * Neural TTS synthesis — returns a complete WAV blob.
- * The server computes the full audio in memory before sending (Content-Length set),
- * which ensures blob URLs support seek / range operations in the browser.
- * The server uploads to R2 as a background task after the response is sent.
- */
-export async function synthesizeStream(
-  phonemes: string[],
-  voiceId: string,
-  text: string,
-  lang = "en",
-  edgeVoice = "",
-  voiceMode: "natural" | "cloned" = "cloned",
-  ttsEngine = "auto",
-  voiceName = "",
-  gender: "male" | "female" = "female",
-): Promise<Blob> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/synthesize/stream`, {
-    method: "POST",
-    headers: amtHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ phonemes, voice_id: voiceId, voice_name: voiceName, text, lang, edge_voice: edgeVoice, voice_mode: voiceMode, tts_engine: ttsEngine, gender }),
-    credentials: "include",
-  });
-  await handleQuotaError(res);
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Streaming synthesis failed: ${err}`);
-  }
-
-  // Collect response body (may be chunked or single response)
-  const reader = res.body!.getReader();
-  const chunks: Uint8Array[] = [];
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) chunks.push(value);
-  }
-
-  // Patch WAV header to match actual received bytes (guards against any truncation)
-  return patchWavHeader(chunks);
-}
-
-/**
- * SSE-based synthesis — streams stage progress events from the backend,
- * calling onStage() for each, then returns the final WAV Blob.
- * Falls back to synthesizeStream() if SSE is unavailable.
- */
-export async function synthesizeWithProgress(
-  text: string,
-  voiceId: string,
-  onStage: (stage: string, percent: number) => void,
-  lang = "en",
-  edgeVoice = "",
-  voiceMode: "natural" | "cloned" = "cloned",
-  ttsEngine = "auto",
-  voiceName = "",
-  gender: "male" | "female" = "female",
-): Promise<Blob> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/synthesize/progress`, {
-    method: "POST",
-    headers: amtHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ phonemes: [], voice_id: voiceId, voice_name: voiceName, text, lang, edge_voice: edgeVoice, voice_mode: voiceMode, tts_engine: ttsEngine, gender }),
-    credentials: "include",
-  });
-
-  await handleQuotaError(res);
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Progress synthesis failed: ${err}`);
-  }
-
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let audioBase64: string | null = null;
-  let audioMime = "audio/wav";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // SSE events are separated by double newlines
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "stage") {
-          onStage(event.stage as string, event.percent as number);
-        } else if (event.type === "audio") {
-          audioBase64 = event.data as string;
-          audioMime = (event.mime as string) || "audio/wav";
-          onStage("Audio ready", 100);
-        } else if (event.type === "error") {
-          throw new Error(event.message as string);
-        }
-      } catch (e) {
-        if (e instanceof SyntaxError) continue; // partial JSON, skip
-        throw e;
-      }
-    }
-  }
-
-  if (!audioBase64) throw new Error("No audio received from synthesis");
-
-  // Decode base64 audio → Blob (WAV or MP3 depending on backend)
-  const bytes = Uint8Array.from(atob(audioBase64), (c) => c.charCodeAt(0));
-  if (audioMime === "audio/wav") {
-    return patchWavHeader([bytes]);
-  }
-  return new Blob([bytes], { type: audioMime });
-}
-
-// ─── Sentence-level streaming TTS ─────────────────────────────────────────────
-
-/**
- * SSE-based sentence-level streaming synthesis.
- * The backend splits text into sentences and streams each sentence's audio
- * as it becomes available, enabling gapless playback that starts after
- * the very first sentence is synthesized.
- */
-export async function synthesizeStreamSentences(
-  text: string,
-  voiceId: string,
-  onSentenceStart: (index: number, total: number, sentenceText: string) => void,
-  onSentenceAudio: (index: number, audioBlob: Blob, durationMs: number) => void,
-  onComplete: (totalSentences: number) => void,
-  onError: (error: string) => void,
-  lang = "en",
-  edgeVoice = "",
-  voiceMode: "natural" | "cloned" = "cloned",
-  ttsEngine = "auto",
-  voiceName = "",
-  gender: "male" | "female" = "female",
-): Promise<void> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/synthesize/sentence-stream`, {
-    method: "POST",
-    headers: amtHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ text, voice_id: voiceId, voice_name: voiceName, lang, edge_voice: edgeVoice, voice_mode: voiceMode, tts_engine: ttsEngine, gender }),
-    credentials: "include",
-  });
-
-  await handleQuotaError(res);
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Sentence-stream synthesis failed: ${err}`);
-  }
-
-  const reader = res.body!.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    buffer += decoder.decode(value, { stream: true });
-
-    // SSE events are separated by double newlines
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-
-    for (const part of parts) {
-      const line = part.trim();
-      if (!line.startsWith("data: ")) continue;
-      try {
-        const event = JSON.parse(line.slice(6));
-        if (event.type === "sentence_start") {
-          onSentenceStart(event.index as number, event.total as number, event.text as string);
-        } else if (event.type === "sentence_audio") {
-          // Decode base64 audio data into a Blob
-          const bytes = Uint8Array.from(atob(event.data as string), (c) => c.charCodeAt(0));
-          const blob = new Blob([bytes], { type: (event.mime as string) || "audio/mpeg" });
-          onSentenceAudio(event.index as number, blob, event.duration_ms as number);
-        } else if (event.type === "complete") {
-          onComplete(event.total_sentences as number);
-        } else if (event.type === "error") {
-          onError(event.message as string);
-        }
-      } catch (e) {
-        if (e instanceof SyntaxError) continue; // partial JSON, skip
-        throw e;
-      }
-    }
-  }
-}
-
-// ─── WebSocket TTS Streaming (Week 4 — binary frames, lowest latency) ────────
-
-export interface WsTtsConfig {
-  voiceId?: string;
-  voiceName?: string;
-  lang?: string;
-  edgeVoice?: string;
-  translateTo?: string;
-  tenantId?: string;
-  tenantName?: string;
-  voiceMode?: "natural" | "cloned";
-  ttsEngine?: string;
-  gender?: "male" | "female";
-  accent?: string;
-}
-
-export interface WsTtsCallbacks {
-  onReady?: () => void;
-  onSentenceStart?: (index: number, total: number, text: string) => void;
-  onSentenceAudio?: (index: number, audioBlob: Blob, durationMs: number) => void;
-  onComplete?: (totalSentences: number, requestId: string) => void;
-  onError?: (message: string) => void;
-  onDisconnect?: () => void;
-}
-
-/**
- * Open a persistent WebSocket connection for TTS streaming.
- *
- * Binary audio frames are sent directly (no base64 encoding = 40% less bandwidth).
- * Multiple synthesize requests can be sent over the same connection.
- * Auto-reconnects on disconnect (with exponential backoff).
- *
- * @example
- * ```ts
- * const tts = openTtsWebSocket(
- *   { voiceId: "vivek", lang: "en" },
- *   {
- *     onSentenceAudio: (i, blob) => playAudio(blob),
- *     onComplete: () => console.log("done"),
- *   }
- * );
- * tts.synthesize("Hello world. How are you?");
- * // Later...
- * tts.close();
- * ```
- */
-export function openTtsWebSocket(
-  config: WsTtsConfig,
-  callbacks: WsTtsCallbacks,
-): {
-  synthesize: (text: string, requestId?: string, overrides?: Partial<WsTtsConfig>) => void;
-  close: () => void;
-  isConnected: () => boolean;
-} {
-  const wsBase = AMT_BASE.replace(/^http/, "ws");
-  let ws: WebSocket | null = null;
-  let connected = false;
-  let reconnectAttempt = 0;
-  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  let closed = false;
-
-  // Track pending binary frame per sentence (binary comes before sentence_end)
-  let pendingBinary: Blob | null = null;
-  let pendingSentenceIndex = -1;
-
-  function connect() {
-    if (closed) return;
-    ws = new WebSocket(`${wsBase}/amt/v1/tts/ws`);
-    ws.binaryType = "arraybuffer";
-
-    ws.onopen = () => {
-      reconnectAttempt = 0;
-      // Send config handshake
-      ws!.send(JSON.stringify({
-        type: "config",
-        tenant_id: config.tenantId || "public",
-        tenant_name: config.tenantName || "",
-        session_id: getPublicSessionId(),
-        voice_id: config.voiceId || "",
-        voice_name: config.voiceName || "",
-        lang: config.lang || "en",
-        edge_voice: config.edgeVoice || "",
-        translate_to: config.translateTo || "",
-        voice_mode: config.voiceMode || "cloned",
-        tts_engine: config.ttsEngine || "auto",
-        gender: config.gender || "female",
-        accent: config.accent || "",
-      }));
-    };
-
-    ws.onmessage = (e) => {
-      if (e.data instanceof ArrayBuffer) {
-        // Binary frame = raw WAV audio bytes
-        pendingBinary = new Blob([e.data], { type: "audio/wav" });
-        return;
-      }
-
-      // Text frame = JSON control event
-      try {
-        const event = JSON.parse(e.data as string);
-
-        switch (event.type) {
-          case "ready":
-            connected = true;
-            callbacks.onReady?.();
-            break;
-
-          case "sentence_start":
-            pendingSentenceIndex = event.index as number;
-            pendingBinary = null; // reset for this sentence
-            callbacks.onSentenceStart?.(
-              event.index as number,
-              event.total as number,
-              event.text as string,
-            );
-            break;
-
-          case "sentence_end":
-            // Binary frame was received just before this — match them
-            if (pendingBinary && callbacks.onSentenceAudio) {
-              callbacks.onSentenceAudio(
-                event.index as number,
-                pendingBinary,
-                event.duration_ms as number,
-              );
-            }
-            pendingBinary = null;
-            break;
-
-          case "complete":
-            callbacks.onComplete?.(
-              event.total_sentences as number,
-              event.request_id as string || "",
-            );
-            break;
-
-          case "error":
-            callbacks.onError?.(event.message as string);
-            break;
-
-          case "pong":
-            // keepalive acknowledged
-            break;
-        }
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    ws.onerror = () => {
-      callbacks.onError?.("WebSocket connection error");
-    };
-
-    ws.onclose = () => {
-      connected = false;
-      if (!closed) {
-        callbacks.onDisconnect?.();
-        // Auto-reconnect with exponential backoff (max 30s)
-        const delay = Math.min(1000 * 2 ** reconnectAttempt, 30000);
-        reconnectAttempt++;
-        reconnectTimer = setTimeout(connect, delay);
-      }
-    };
-  }
-
-  // Start connection
-  connect();
-
-  // Keepalive ping every 25s
-  const pingInterval = setInterval(() => {
-    if (ws && connected) {
-      ws.send(JSON.stringify({ type: "ping" }));
-    }
-  }, 25000);
-
-  return {
-    synthesize(text: string, requestId?: string, overrides?: Partial<WsTtsConfig>) {
-      if (!ws || !connected) {
-        callbacks.onError?.("WebSocket not connected");
-        return;
-      }
-      const msg: Record<string, unknown> = {
-        type: "synthesize",
-        text,
-      };
-      if (requestId) msg.request_id = requestId;
-      if (overrides?.lang) msg.lang = overrides.lang;
-      if (overrides?.voiceId) msg.voice_id = overrides.voiceId;
-      if (overrides?.edgeVoice) msg.edge_voice = overrides.edgeVoice;
-      if (overrides?.translateTo) msg.translate_to = overrides.translateTo;
-      if (overrides?.voiceMode) msg.voice_mode = overrides.voiceMode;
-      ws.send(JSON.stringify(msg));
-    },
-
-    close() {
-      closed = true;
-      clearInterval(pingInterval);
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (ws) ws.close();
-    },
-
-    isConnected() {
-      return connected;
-    },
-  };
-}
-
-// ─── Vocoder ──────────────────────────────────────────────────────────────────
-
-export async function vocode(melB64: string, nMel: number, nFrames: number): Promise<Blob> {
-  const melBytes = Uint8Array.from(atob(melB64), (c) => c.charCodeAt(0));
-
-  if (melBytes.byteLength === 0) {
-    throw new Error("Vocoder conversion failed: mel data is empty");
-  }
-
-  const res = await fetch(`${AMT_BASE}/amt/v1/vocoder/convert`, {
-    method: "POST",
-    headers: amtHeaders({
-      "Content-Type": "application/octet-stream",
-      "X-N-Mel": String(nMel),
-      "X-N-Frames": String(nFrames),
-    }),
-    body: melBytes,
-    credentials: "include",
-  });
-  await handleQuotaError(res);
-  if (!res.ok) {
-    const errText = await res.text().catch(() => "");
-    throw new Error(`Vocoder conversion failed (${res.status}): ${errText}`);
-  }
-
-  // The vocoder now returns a fully-formed WAV file (audio/wav).
-  // Use the blob directly — no frontend PCM→WAV conversion needed.
-  const wavBlob = await res.blob();
-  if (wavBlob.size < 44) {
-    throw new Error("Vocoder returned empty audio — check backend logs");
-  }
-  return new Blob([wavBlob], { type: "audio/wav" });
-}
-
-function pcmToWavBlob(samples: Int16Array, sampleRate: number): Blob {
-  const numChannels = 1;
-  const bytesPerSample = 2;
-  const dataSize = samples.length * bytesPerSample;
-  const buffer = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buffer);
-
-  const writeStr = (offset: number, s: string) => {
-    for (let i = 0; i < s.length; i++) view.setUint8(offset + i, s.charCodeAt(i));
-  };
-
-  writeStr(0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  writeStr(8, "WAVE");
-  writeStr(12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
-  view.setUint16(32, numChannels * bytesPerSample, true);
-  view.setUint16(34, bytesPerSample * 8, true);
-  writeStr(36, "data");
-  view.setUint32(40, dataSize, true);
-
-  const out = new Int16Array(buffer, 44);
-  out.set(samples);
-  return new Blob([buffer], { type: "audio/wav" });
 }
 
 // ─── Translator ───────────────────────────────────────────────────────────────

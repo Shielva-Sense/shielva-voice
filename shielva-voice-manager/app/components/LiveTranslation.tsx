@@ -4,7 +4,7 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import { createPortal } from "react-dom";
 import { Mic, MicOff, Radio, Square, Volume2, FolderOpen, X, Download, Play, Pause, ChevronRight, RefreshCw } from "lucide-react";
 import { notify } from "../lib/toast";
-import { transcribe, translate, synthesizeStream, saveLiveTranslationClip, getLiveTranslationClips } from "../lib/amt-api";
+import { transcribe, translate, synthesizeSpeech, saveLiveTranslationClip, getLiveTranslationClips } from "../lib/amt-api";
 import { recordMic } from "../lib/audio-utils";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
@@ -31,7 +31,7 @@ const LANG_NAMES: Record<string, string> = {
 
 const LIVE_STAGES = [
   { label: "Recording audio...",        percent: 10 },
-  { label: "Transcribing with Whisper...", percent: 30 },
+  { label: "Transcribing with faster-whisper...", percent: 30 },
   { label: "Translating...",            percent: 50 },
   { label: "Synthesizing speech...",    percent: 75 },
   { label: "Playing translation...",    percent: 95 },
@@ -370,7 +370,7 @@ export default function LiveTranslation() {
         if (r.detected_lang) detectedLang = r.detected_lang;
       } catch (err: any) {
         if (err?.quota) { notify.quotaExceeded(err.quota); return false; }
-        notify.serviceOffline("Whisper ASR");
+        notify.serviceOffline("faster-whisper ASR");
         return false;
       }
 
@@ -384,7 +384,7 @@ export default function LiveTranslation() {
         translatedText = r.translated_text;
       } catch (err: any) {
         if (err?.quota) { notify.quotaExceeded(err.quota); return false; }
-        notify.serviceOffline("NLLB-200 Translator");
+        notify.serviceOffline("Qwen Translator");
         return false;
       }
 
@@ -395,26 +395,15 @@ export default function LiveTranslation() {
         ...prev,
       ].slice(0, 20));
 
-      // 3. Synthesize via synthesizeStream — uses Edge TTS with target language natively.
-      //    This is the key quality fix: previous pipeline used an English-only phonemizer
-      //    on translated text, producing garbled audio for Hindi/Tamil/etc.
-      //    synthesizeStream passes text + tgtLang directly to Edge TTS which supports 50+ languages.
+      // 3. Synthesize the translated text with IndicF5 (zero-shot). IndicF5 renders
+      //    the target-language script directly, so the translated text is handed to
+      //    it as-is using the default reference voice.
       let wavBlob: Blob;
       try {
-        wavBlob = await synthesizeStream(
-          [],          // no phonemes — Edge TTS doesn't need them
-          "",          // no voice cloning
-          translatedText,
-          tgt,         // target language — Edge TTS uses this for native pronunciation
-          "",          // edge_voice: let backend pick best voice for tgt language
-          "natural",   // natural mode — no RVC cloning
-          "auto",      // engine: auto-select best for tgt language
-          "",
-          "female",
-        );
+        wavBlob = await synthesizeSpeech({ text: translatedText });
       } catch (err: any) {
         if (err?.quota) { notify.quotaExceeded(err.quota); return false; }
-        notify.serviceOffline("Shielva TTS");
+        notify.serviceOffline("IndicF5 TTS");
         return !cancelledRef.current;
       }
 
@@ -562,7 +551,7 @@ export default function LiveTranslation() {
         <div className="vm-card-icon"><Radio size={18} strokeWidth={2} /></div>
         <div>
           <div className="vm-card-title">Live Voice Translation</div>
-          <div className="vm-card-subtitle">Whisper (auto-detect) → NLLB → Edge TTS · {CHUNK_SEC}s chunks</div>
+          <div className="vm-card-subtitle">faster-whisper (auto-detect) → Qwen → IndicF5 · {CHUNK_SEC}s chunks</div>
         </div>
         <UsageIndicator resource="both" />
       </div>
@@ -739,7 +728,7 @@ export default function LiveTranslation() {
       </div>
 
       <div className="vm-info" style={{ marginTop: 12 }}>
-        Whisper auto-detects spoken language. Edge TTS renders translations natively in the target
+        faster-whisper auto-detects the spoken language. IndicF5 renders translations natively in the target
         language. Clips persist in browser storage — use "Sync from cloud" on a new device.
       </div>
 

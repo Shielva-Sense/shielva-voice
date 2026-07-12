@@ -8,14 +8,16 @@ interface Props {
   onRefresh: () => void;
 }
 
+// Live services after the IndicF5 migration. Removed: speaker-encoder (resemblyzer,
+// :8202) and vocoder (HiFi-GAN, :8204) — IndicF5 clones zero-shot from a reference clip.
 const SERVICE_META: Record<string, { port: number; model: string }> = {
-  acoustic: { port: 8200, model: "Whisper Small (int8)" },
-  intent: { port: 8201, model: "BART-large-MNLI" },
-  speaker: { port: 8202, model: "GE2E 256-dim" },
-  "shielva-tts": { port: 8203, model: "Shielva TTS (VITS + Edge TTS + RVC)" },
-  vocoder: { port: 8204, model: "HiFi-GAN V1" },
-  translator: { port: 8205, model: "NLLB-200-distilled-600M" },
+  acoustic: { port: 8200, model: "faster-whisper large-v3-turbo (CUDA)" },
+  intent: { port: 8201, model: "Intent classifier" },
+  "shielva-tts": { port: 8203, model: "IndicF5 (zero-shot cloning)" },
+  translator: { port: 8205, model: "Qwen 7B (translate + cleanup)" },
 };
+
+const SERVICE_COUNT = Object.keys(SERVICE_META).length;
 
 export default function SystemStatus({ health, onRefresh }: Props) {
   return (
@@ -26,7 +28,7 @@ export default function SystemStatus({ health, onRefresh }: Props) {
         </div>
         <div>
           <div className="vm-card-title">System Status</div>
-          <div className="vm-card-subtitle">6 Neural ML Services</div>
+          <div className="vm-card-subtitle">{SERVICE_COUNT} AMT ML services</div>
         </div>
         <button
           className="vm-btn vm-btn-sm"
