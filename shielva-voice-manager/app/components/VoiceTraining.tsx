@@ -595,7 +595,9 @@ export default function VoiceTraining() {
         {submitting ? (
           <>
             <Loader2 size={14} className="vt-spin" />
-            {pollMessage || (submitStatus === "uploading" ? "Uploading…" : `Training… ${pollProgress}%`)}
+            {/* uploading/polling render via the early returns above, so submitStatus
+                is only "idle"|"failed" here — the "uploading" branch was dead. */}
+            {pollMessage || `Training… ${pollProgress}%`}
           </>
         ) : (
           <>

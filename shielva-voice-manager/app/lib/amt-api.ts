@@ -1182,7 +1182,16 @@ export interface VoiceTrainingResult {
 }
 
 export interface VoiceTrainingStatus {
-  status: "processing" | "complete" | "failed";
+  // Full set of states the backend streams (was narrowed to 3, which made the
+  // correct runtime handling of the terminal/queue states below dead-type-check).
+  status:
+    | "pending"
+    | "uploading_rvc"
+    | "processing"
+    | "complete"
+    | "failed"
+    | "not_found"
+    | "registered";
   progress: number;
   message?: string;
   voice_id?: string;

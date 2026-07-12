@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from 'react';
+import { Suspense, useState } from 'react';
 import { useSearchParams } from 'next/navigation';
 import { AudioWaveform } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 
-export default function LoginPage() {
+function LoginContent() {
     const { login } = useAuth();
     const searchParams = useSearchParams();
     const [isRedirecting, setIsRedirecting] = useState(false);
@@ -162,5 +162,15 @@ export default function LoginPage() {
                 }
             `}</style>
         </div>
+    );
+}
+
+// useSearchParams() requires a Suspense boundary for static generation (Next.js
+// CSR-bailout rule). Without this the /login page fails to prerender at build.
+export default function LoginPage() {
+    return (
+        <Suspense fallback={<div style={{ minHeight: '100vh', background: 'var(--black)' }} />}>
+            <LoginContent />
+        </Suspense>
     );
 }
