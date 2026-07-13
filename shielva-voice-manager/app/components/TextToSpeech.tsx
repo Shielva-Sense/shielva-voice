@@ -317,7 +317,7 @@ export default function TextToSpeech() {
       // ── Synthesize with IndicF5 (zero-shot; default reference or a cloned voice) ──
       setStep("Synthesizing with IndicF5...");
       proc.addLog(voiceId ? `Cloning "${selectedVoiceName}"...` : "Using default IndicF5 reference voice...");
-      const wavBlob = await synthesizeSpeech({
+      const { blob: wavBlob, audioUrl } = await synthesizeSpeech({
         text: speakText,
         engine: ttsEngine,
         ...(voiceId ? { voiceId } : {}),
@@ -354,6 +354,7 @@ export default function TextToSpeech() {
           inputSummary: text.trim(),
           outputSummary: speakText !== text ? speakText : "",
           textChars: speakText.length,
+          audioUrl,
         }).then(() => refreshUsage());
       }
     } catch (err) {

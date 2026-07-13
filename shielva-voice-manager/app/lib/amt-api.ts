@@ -574,7 +574,14 @@ export interface SynthesizeParams {
  * The server computes the full clip in memory before responding (Content-Length
  * set), so the resulting blob/data URL supports seek + range in the browser.
  */
-export async function synthesizeSpeech(params: SynthesizeParams): Promise<Blob> {
+export interface SynthesizeResult {
+  /** The finished audio, ready for a data/object URL. */
+  blob: Blob;
+  /** Server-relative URL to replay this clip later (Recent Items). Empty if not stored. */
+  audioUrl?: string;
+}
+
+export async function synthesizeSpeech(params: SynthesizeParams): Promise<SynthesizeResult> {
   const body: Record<string, unknown> = { text: params.text, engine: params.engine ?? "f5" };
   if (params.voiceId) body.voice_id = params.voiceId;
   if (params.voiceAudioB64) body.voice_audio_b64 = params.voiceAudioB64;
@@ -595,14 +602,14 @@ export async function synthesizeSpeech(params: SynthesizeParams): Promise<Blob> 
   // `/amt/v1/synthesize` returns JSON: { type: "wav", wav_data_b64: "<base64 WAV>" }.
   // Decode the base64 payload into the actual audio bytes — reading the response as
   // a raw byte stream would hand the <audio> element the JSON text, not a WAV.
-  const data: { type?: string; wav_data_b64?: string } = await res.json();
+  const data: { type?: string; wav_data_b64?: string; audio_url?: string } = await res.json();
   const b64 = typeof data.wav_data_b64 === "string" ? data.wav_data_b64 : "";
   if (!b64) throw new Error("Synthesis returned no audio");
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   // Reuse the RIFF/data size-guard, then wrap as an audio/wav Blob.
-  return patchWavHeader([bytes]);
+  return { blob: patchWavHeader([bytes]), audioUrl: data.audio_url || undefined };
 }
 
 /**
@@ -749,6 +756,8 @@ export interface RecordUsageParams {
   textChars?: number;
   /** Seconds of audio transcribed/spoken — increments the voice-usage quota. */
   voiceSeconds?: number;
+  /** Server-relative URL of the stored clip, so Recent Items can replay it. */
+  audioUrl?: string;
 }
 
 /**
@@ -771,6 +780,7 @@ export async function recordUsage(p: RecordUsageParams): Promise<void> {
         output_summary: p.outputSummary,
         text_chars: p.textChars,
         voice_seconds: p.voiceSeconds,
+        audio_url: p.audioUrl,
       }),
     });
   } catch {
