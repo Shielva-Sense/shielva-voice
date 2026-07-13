@@ -555,6 +555,21 @@ export function openRealtimeSession(
 /** TTS engine: F5-TTS base (English/Chinese) or AI4Bharat IndicF5 (Indian languages). */
 export type TtsEngine = "f5" | "indicf5";
 
+// Languages each TTS engine can actually render. F5-TTS base was trained on
+// English + Chinese only; IndicF5 covers the 11 Indian languages. Any other
+// language (Italian, Spanish, …) is unsupported today — offering it would just
+// produce garbage, so the UI hides it rather than pretending.
+export const F5_TTS_LANGS: readonly string[] = ["en", "zh"];
+export const INDICF5_TTS_LANGS: readonly string[] = [
+  "hi", "ta", "te", "kn", "ml", "mr", "bn", "gu", "pa", "or", "as", "ur", "sa",
+];
+export const SUPPORTED_TTS_LANGS: readonly string[] = [...F5_TTS_LANGS, ...INDICF5_TTS_LANGS];
+
+/** Pick the engine for an output language: Indian scripts → IndicF5, else F5. */
+export function engineForLang(lang: string): TtsEngine {
+  return INDICF5_TTS_LANGS.includes(lang) ? "indicf5" : "f5";
+}
+
 export interface SynthesizeParams {
   /** Text to speak. The engine renders whatever script it is given. */
   text: string;

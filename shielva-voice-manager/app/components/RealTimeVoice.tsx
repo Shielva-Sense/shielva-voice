@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Radio, Mic, Square, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge } from "lucide-react";
-import { openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, type RealtimeEvent, type TranslateEngine } from "../lib/amt-api";
+import { openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, engineForLang, SUPPORTED_TTS_LANGS, type RealtimeEvent, type TranslateEngine } from "../lib/amt-api";
 import { saveClipIDB, loadAllClipsIDB, updateClipCloud, bufferToUrl, type StoredClip } from "../lib/live-translation-store";
 import { useAuth } from "../context/AuthContext";
 import { useVoice } from "../context/VoiceContext";
@@ -677,10 +677,14 @@ export default function RealTimeVoice() {
     return () => { if (vadTimerRef.current) clearInterval(vadTimerRef.current); };
   }, [active]);
 
-  // Computed options for LanguageSelect
+  // Computed options for LanguageSelect. Input (SPEAK IN) can be any language the
+  // recognizer handles; OUTPUT is restricted to languages a TTS engine can speak
+  // (English/Chinese via F5, the 11 Indian languages via IndicF5) — the engine is
+  // then auto-chosen from the output language server-side.
   const rtLangOptions: LangOption[] = Object.entries(LANGUAGES).map(([k, v]) => ({
     value: k, label: v.name, flag: v.flag, group: v.group,
   }));
+  const rtOutputLangOptions: LangOption[] = rtLangOptions.filter((o) => SUPPORTED_TTS_LANGS.includes(o.value));
 
   // Handle WebSocket events
   const handleEvent = useCallback((event: RealtimeEvent) => {
@@ -872,7 +876,7 @@ export default function RealTimeVoice() {
         </div>
         <div>
           <div className="vm-card-title">Real-Time Voice Translation</div>
-          <div className="vm-card-subtitle">VAD → faster-whisper → {engine === "qwen" ? "Qwen" : "NLLB"} → IndicF5</div>
+          <div className="vm-card-subtitle">VAD → faster-whisper → {engine === "qwen" ? "Qwen" : "NLLB"} → {engineForLang(tgtLang) === "indicf5" ? "IndicF5" : "F5"}</div>
         </div>
         {active && (
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -903,7 +907,7 @@ export default function RealTimeVoice() {
           <LanguageSelect
             value={tgtLang}
             onChange={setTgtLang}
-            options={rtLangOptions}
+            options={rtOutputLangOptions}
             disabled={active}
             placeholder="Target language"
           />
@@ -1179,7 +1183,7 @@ export default function RealTimeVoice() {
 
       {/* Info footer */}
       <div className="vm-info" style={{ marginTop: 10 }}>
-        Silero VAD → faster-whisper → Qwen translate → <strong>IndicF5 zero-shot</strong>.
+        Silero VAD → faster-whisper → translate → <strong>{engineForLang(tgtLang) === "indicf5" ? "IndicF5" : "F5-TTS"} zero-shot</strong>.
         {" "}AudioWorklet runs in a dedicated thread for glitch-free capture.
       </div>
 
