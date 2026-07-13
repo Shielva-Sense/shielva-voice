@@ -587,15 +587,17 @@ export async function synthesizeSpeech(params: SynthesizeParams): Promise<Blob> 
     throw new Error(`Synthesis failed: ${err}`);
   }
 
-  const reader = res.body!.getReader();
-  const chunks: Uint8Array[] = [];
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    if (value) chunks.push(value);
-  }
-  // Patch the WAV header so RIFF/data sizes match the received bytes.
-  return patchWavHeader(chunks);
+  // `/amt/v1/synthesize` returns JSON: { type: "wav", wav_data_b64: "<base64 WAV>" }.
+  // Decode the base64 payload into the actual audio bytes — reading the response as
+  // a raw byte stream would hand the <audio> element the JSON text, not a WAV.
+  const data: { type?: string; wav_data_b64?: string } = await res.json();
+  const b64 = typeof data.wav_data_b64 === "string" ? data.wav_data_b64 : "";
+  if (!b64) throw new Error("Synthesis returned no audio");
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  // Reuse the RIFF/data size-guard, then wrap as an audio/wav Blob.
+  return patchWavHeader([bytes]);
 }
 
 /**
