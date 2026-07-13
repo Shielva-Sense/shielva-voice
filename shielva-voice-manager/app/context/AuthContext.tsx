@@ -66,7 +66,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         const validateSession = async () => {
             try {
-                const res = await fetch(`${IDENTITY_URL}/api/v1/unified/me`, {
+                const res = await fetch(`${IDENTITY_URL}/identity/api/v1/unified/me`, {
                     credentials: 'include',
                 });
 
@@ -146,7 +146,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     useEffect(() => {
         const keepAlive = async () => {
             try {
-                await fetch(`${IDENTITY_URL}/api/v1/unified/me`, { credentials: 'include' });
+                await fetch(`${IDENTITY_URL}/identity/api/v1/unified/me`, { credentials: 'include' });
             } catch {
                 // Non-fatal — if it fails, the full validateSession on next page load handles it
             }

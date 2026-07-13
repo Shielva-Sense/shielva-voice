@@ -18,7 +18,7 @@ function CallbackContent() {
             try {
                 // Primary: cookie-based auth (HttpOnly cookie set by identity service on login)
                 const res = await fetch(
-                    `${IDENTITY_URL}/api/v1/unified/me`,
+                    `${IDENTITY_URL}/identity/api/v1/unified/me`,
                     { credentials: 'include' }
                 );
                 if (res.ok) {
@@ -31,7 +31,7 @@ function CallbackContent() {
                 const token = params.get('token');
                 if (token) {
                     const tokenRes = await fetch(
-                        `${IDENTITY_URL}/api/v1/unified/me`,
+                        `${IDENTITY_URL}/identity/api/v1/unified/me`,
                         {
                             credentials: 'include',
                             headers: { 'Authorization': `Bearer ${token}` },
