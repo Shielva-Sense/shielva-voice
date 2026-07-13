@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
-import { synthesizeSpeech, translate, getLanguages, recordUsage, type TranslateEngine } from "../lib/amt-api";
+import { synthesizeSpeech, translate, getLanguages, recordUsage, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
@@ -56,6 +56,14 @@ const LANGUAGES: Record<string, { name: string; flag: string; group: "indian" | 
   cs: { name: "Czech",      flag: "🇨🇿", group: "international" },
   hu: { name: "Hungarian",  flag: "🇭🇺", group: "international" },
 };
+
+// TTS engine choices. "f5" (F5-TTS base) drives English/international output;
+// "indicf5" (AI4Bharat IndicF5) drives Indian regional languages. Selecting one
+// gates the language pickers to that model's supported languages.
+const TTS_ENGINE_OPTIONS: { key: TtsEngine; label: string; hint: string }[] = [
+  { key: "f5", label: "F5 · English", hint: "F5-TTS — English & international" },
+  { key: "indicf5", label: "IndicF5 · Indian", hint: "AI4Bharat IndicF5 — Indian regional languages" },
+];
 
 // ─── Virtual Keyboard Layouts ────────────────────────────────────────────────
 const KB_LAYOUTS: Record<string, string[][]> = {
@@ -172,6 +180,9 @@ export default function TextToSpeech() {
   const [inputLang, setInputLang] = useState("en");
   const [outputLang, setOutputLang] = useState("en");
   const [engine, setEngine] = useState<TranslateEngine>("qwen");
+  // TTS model: "f5" (English/international, F5-TTS base) or "indicf5" (Indian
+  // regional languages, AI4Bharat IndicF5). Gates which languages are selectable.
+  const [ttsEngine, setTtsEngine] = useState<TtsEngine>("f5");
   const [availableLangs, setAvailableLangs] = useState<string[]>(Object.keys(LANGUAGES));
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -218,6 +229,16 @@ export default function TextToSpeech() {
     return () => clearTimers();
   }, [isAuthenticated]);
 
+  // When the TTS model flips, snap both languages to a valid one for it — so a
+  // stale Indian language never lingers after switching to F5 (and vice-versa).
+  useEffect(() => {
+    const wantIndian = ttsEngine === "indicf5";
+    const ok = (l: string) => LANGUAGES[l]?.group === (wantIndian ? "indian" : "international");
+    const fallback = wantIndian ? "hi" : "en";
+    setInputLang((l) => (ok(l) ? l : fallback));
+    setOutputLang((l) => (ok(l) ? l : fallback));
+  }, [ttsEngine]);
+
   // Pre-select the user's default cloned voice once it is available (authed only).
   useEffect(() => {
     if (!isAuthenticated || defaultAppliedRef.current) return;
@@ -239,23 +260,19 @@ export default function TextToSpeech() {
     voices.find((v) => v.voice_id === voiceId)?.name || "Default IndicF5 voice";
 
   // ── Computed option arrays for LanguageSelect ────────────────────────────
-  const inputLangOptions: LangOption[] = availableLangs
-    .filter((l) => LANGUAGES[l])
+  // Gate languages by the selected TTS model: F5 → English/international only
+  // (Indian regional languages hidden); IndicF5 → Indian languages only.
+  const engineGroup: "indian" | "international" = ttsEngine === "indicf5" ? "indian" : "international";
+  const engineLangOptions: LangOption[] = availableLangs
+    .filter((l) => LANGUAGES[l] && LANGUAGES[l].group === engineGroup)
     .map((l) => ({
       value: l,
       label: LANGUAGES[l].name,
       flag: LANGUAGES[l].flag,
       group: LANGUAGES[l].group,
     }));
-
-  const outputLangOptions: LangOption[] = availableLangs
-    .filter((l) => LANGUAGES[l])
-    .map((l) => ({
-      value: l,
-      label: LANGUAGES[l].name,
-      flag: LANGUAGES[l].flag,
-      group: LANGUAGES[l].group,
-    }));
+  const inputLangOptions = engineLangOptions;
+  const outputLangOptions = engineLangOptions;
 
   const handleGenerate = async () => {
     if (!text.trim() || overLimit) return;
@@ -302,6 +319,7 @@ export default function TextToSpeech() {
       proc.addLog(voiceId ? `Cloning "${selectedVoiceName}"...` : "Using default IndicF5 reference voice...");
       const wavBlob = await synthesizeSpeech({
         text: speakText,
+        engine: ttsEngine,
         ...(voiceId ? { voiceId } : {}),
       });
 
@@ -382,6 +400,37 @@ export default function TextToSpeech() {
       </div>
 
       {/* Language selectors — Input + Output */}
+      {/* TTS model selector — gates the language options below */}
+      <div style={{ marginBottom: 8 }}>
+        <div className="vm-label" style={{ marginBottom: 4 }}>Voice model</div>
+        <div role="radiogroup" aria-label="Voice model" style={{ display: "flex", gap: 6 }}>
+          {TTS_ENGINE_OPTIONS.map((opt) => {
+            const active = ttsEngine === opt.key;
+            return (
+              <button
+                key={opt.key}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                disabled={generating}
+                onClick={() => setTtsEngine(opt.key)}
+                title={opt.hint}
+                style={{
+                  flex: 1, padding: "7px 10px", borderRadius: 8, fontSize: 12, fontWeight: 500,
+                  border: `1px solid ${active ? "var(--bamboo-400)" : "var(--border-subtle)"}`,
+                  background: "var(--surface-subtle)",
+                  color: active ? "var(--text-primary)" : "var(--text-muted)",
+                  cursor: generating ? "not-allowed" : "pointer",
+                  opacity: generating ? 0.5 : 1, textAlign: "center", outline: "none",
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "flex-end" }}>
         {/* Input language — click to open picker modal */}
         <div style={{ flex: 1 }}>

@@ -552,8 +552,11 @@ export function openRealtimeSession(
 // selection, no gender, no accent, no phoneme/vocoder pipeline — a single POST
 // returns a finished WAV clip.
 
+/** TTS engine: F5-TTS base (English/Chinese) or AI4Bharat IndicF5 (Indian languages). */
+export type TtsEngine = "f5" | "indicf5";
+
 export interface SynthesizeParams {
-  /** Text to speak. IndicF5 renders whatever script it is given. */
+  /** Text to speak. The engine renders whatever script it is given. */
   text: string;
   /** A registered/cloned voice from the Voice Library. Omit for the default reference. */
   voiceId?: string;
@@ -561,6 +564,8 @@ export interface SynthesizeParams {
   voiceAudioB64?: string;
   /** Transcript of the inline reference clip — improves zero-shot cloning fidelity. */
   refText?: string;
+  /** Synthesis engine — routes to the matching model. Defaults to "f5". */
+  engine?: TtsEngine;
 }
 
 /**
@@ -570,7 +575,7 @@ export interface SynthesizeParams {
  * set), so the resulting blob/data URL supports seek + range in the browser.
  */
 export async function synthesizeSpeech(params: SynthesizeParams): Promise<Blob> {
-  const body: Record<string, unknown> = { text: params.text };
+  const body: Record<string, unknown> = { text: params.text, engine: params.engine ?? "f5" };
   if (params.voiceId) body.voice_id = params.voiceId;
   if (params.voiceAudioB64) body.voice_audio_b64 = params.voiceAudioB64;
   if (params.refText) body.ref_text = params.refText;
