@@ -734,6 +734,45 @@ export async function getHistoryStats(): Promise<HistoryStats> {
   return res.json();
 }
 
+export interface RecordUsageParams {
+  feature: string;
+  featureLabel?: string;
+  type?: string;
+  inputSummary?: string;
+  outputSummary?: string;
+  /** Characters synthesised/translated — increments the text-usage quota. */
+  textChars?: number;
+  /** Seconds of audio transcribed/spoken — increments the voice-usage quota. */
+  voiceSeconds?: number;
+}
+
+/**
+ * Record a completed operation for Voice Analytics + usage metering. Inference
+ * runs on the standalone pod (no cluster DB access), so the authenticated client
+ * reports each op to the gateway-backed metering DB. Best-effort — a failure
+ * here must never surface to the user or block their result.
+ */
+export async function recordUsage(p: RecordUsageParams): Promise<void> {
+  try {
+    await fetch(`${GATEWAY_BASE}/amt/v1/history/record`, {
+      method: "POST",
+      headers: amtHeaders({ "Content-Type": "application/json" }),
+      credentials: "include",
+      body: JSON.stringify({
+        feature: p.feature,
+        feature_label: p.featureLabel,
+        type: p.type,
+        input_summary: p.inputSummary,
+        output_summary: p.outputSummary,
+        text_chars: p.textChars,
+        voice_seconds: p.voiceSeconds,
+      }),
+    });
+  } catch {
+    // analytics recording is best-effort — swallow errors
+  }
+}
+
 // ── Global Sync ───────────────────────────────────────────────────────────────
 
 export interface SyncResult {

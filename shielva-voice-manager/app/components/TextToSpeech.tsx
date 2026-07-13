@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
-import { synthesizeSpeech, translate, getLanguages, type TranslateEngine } from "../lib/amt-api";
+import { synthesizeSpeech, translate, getLanguages, recordUsage, type TranslateEngine } from "../lib/amt-api";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
@@ -326,7 +326,18 @@ export default function TextToSpeech() {
 
       clearTimers();
       proc.complete("Speech generated successfully");
-      if (isAuthenticated) refreshUsage();
+      if (isAuthenticated) {
+        // Record the operation for Voice Analytics + text-usage metering.
+        // Inference ran on the pod, so the authenticated client reports it.
+        void recordUsage({
+          feature: "text_to_speech",
+          featureLabel: "Text to Speech",
+          type: "audio",
+          inputSummary: text.trim(),
+          outputSummary: speakText !== text ? speakText : "",
+          textChars: speakText.length,
+        }).then(() => refreshUsage());
+      }
     } catch (err) {
       clearTimers();
       proc.cancel();
