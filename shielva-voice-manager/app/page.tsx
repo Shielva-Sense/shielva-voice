@@ -14,6 +14,7 @@ import SystemStatus from "./components/SystemStatus";
 import RealTimeVoice from "./components/RealTimeVoice";
 import AnalyticsWidget from "./components/AnalyticsWidget";
 import VoiceTraining from "./components/VoiceTraining";
+import VoiceCloneLockedCard from "./components/VoiceCloneLockedCard";
 import { useAuth } from "./context/AuthContext";
 import { useStorage } from "./context/StorageContext";
 import SyncWidget from "./components/SyncWidget";
@@ -192,8 +193,16 @@ export default function Home() {
         {isAuthenticated && <AnalyticsWidget />}
         <SpeechToText />
         <TextToSpeech />
-        <VoiceLibrary />
-        {isAuthenticated && <VoiceTraining />}
+        {/* Voice cloning is account-tied: library + enrollment for signed-in users,
+            a compact locked card for anonymous visitors. */}
+        {isAuthenticated ? (
+          <>
+            <VoiceLibrary />
+            <VoiceTraining />
+          </>
+        ) : (
+          <VoiceCloneLockedCard />
+        )}
         <Translator />
         {isAuthenticated && <IntentClassifier />}
         {isAuthenticated && <RealTimeVoice />}

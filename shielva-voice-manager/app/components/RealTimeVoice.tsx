@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Radio, Mic, Square, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge } from "lucide-react";
-import { listVoices, openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, type VoiceInfo, type RealtimeEvent, type TranslateEngine } from "../lib/amt-api";
+import { openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, type RealtimeEvent, type TranslateEngine } from "../lib/amt-api";
 import { saveClipIDB, loadAllClipsIDB, updateClipCloud, bufferToUrl, type StoredClip } from "../lib/live-translation-store";
 import { useAuth } from "../context/AuthContext";
 import { useVoice } from "../context/VoiceContext";
@@ -587,10 +587,23 @@ export default function RealTimeVoice() {
   const vadTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
   const { user, isAuthenticated } = useAuth();
   const { voices } = useVoices();
+  const { defaultVoiceId } = useVoice();
   const { canUseFeature, openModal: openStorageModal } = useStorage();
   const storageAccess = canUseFeature("voice");
+  // Apply the user's default cloned voice once, without fighting later manual picks.
+  const defaultAppliedRef = useRef(false);
 
   // voices now come from useVoices() hook (TanStack Query shared cache)
+
+  // Pre-select the user's default cloned voice once it is available (authed only).
+  useEffect(() => {
+    if (!isAuthenticated) { defaultAppliedRef.current = false; return; }
+    if (defaultAppliedRef.current) return;
+    if (defaultVoiceId && voices.some((v) => v.voice_id === defaultVoiceId)) {
+      setVoiceId(defaultVoiceId);
+      defaultAppliedRef.current = true;
+    }
+  }, [isAuthenticated, defaultVoiceId, voices]);
 
   // ── Fetch which Whisper models are already loaded on the server ──
   useEffect(() => {
@@ -902,7 +915,8 @@ export default function RealTimeVoice() {
         <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Voice</div>
         <select className="vm-select" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={active} style={{ fontSize: 12 }}>
           <option value="">Default IndicF5 voice</option>
-          {voices.map((v) => (
+          {/* Cloned voices are account-scoped — only offered to signed-in users. */}
+          {isAuthenticated && voices.map((v) => (
             <option key={v.voice_id} value={v.voice_id}>
               {v.name || v.voice_id}{v.language ? ` (${v.language.toUpperCase()})` : ""}
             </option>

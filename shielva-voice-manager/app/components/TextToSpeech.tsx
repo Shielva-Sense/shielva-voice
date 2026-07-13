@@ -157,7 +157,7 @@ const TTS_STAGES = [
 const TRANSLATE_STAGE = { label: "Translating text...", percent: 8 };
 
 export default function TextToSpeech() {
-  const { state: { refreshSeq: refreshKey } } = useVoice();
+  const { defaultVoiceId } = useVoice();
   const { voices } = useVoices();
   const { canUseFeature, openModal: openStorageModal } = useStorage();
   const storageAccess = canUseFeature("tts");
@@ -184,6 +184,8 @@ export default function TextToSpeech() {
   const proc = useProcessing();
   const { isAuthenticated, refreshUsage } = useAuth();
   const charLimit = isAuthenticated ? Infinity : PUBLIC_MAX_CHARS;
+  // Apply the user's default cloned voice once, without fighting later manual picks.
+  const defaultAppliedRef = useRef(false);
 
   // Clean up timers whenever generation finishes
   const clearTimers = () => {
@@ -209,12 +211,21 @@ export default function TextToSpeech() {
   };
 
   useEffect(() => {
-    if (!isAuthenticated) setVoiceId("");
+    if (!isAuthenticated) { setVoiceId(""); defaultAppliedRef.current = false; }
     getLanguages()
       .then((langs) => { if (langs.length > 0) setAvailableLangs(langs.filter((l) => l in LANGUAGES)); })
       .catch(() => { setAvailableLangs(Object.keys(LANGUAGES)); });
     return () => clearTimers();
-  }, [refreshKey, isAuthenticated]);
+  }, [isAuthenticated]);
+
+  // Pre-select the user's default cloned voice once it is available (authed only).
+  useEffect(() => {
+    if (!isAuthenticated || defaultAppliedRef.current) return;
+    if (defaultVoiceId && voices.some((v) => v.voice_id === defaultVoiceId)) {
+      setVoiceId(defaultVoiceId);
+      defaultAppliedRef.current = true;
+    }
+  }, [isAuthenticated, defaultVoiceId, voices]);
 
   const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
   // Authenticated users: no word limit. Public users: capped at PUBLIC_MAX_WORDS.
@@ -559,7 +570,8 @@ export default function TextToSpeech() {
           disabled={generating}
         >
           <option value="">Default IndicF5 voice</option>
-          {voices.map((v) => (
+          {/* Cloned voices are account-scoped — only offered to signed-in users. */}
+          {isAuthenticated && voices.map((v) => (
             <option key={v.voice_id} value={v.voice_id}>
               {v.name || v.voice_id}
               {v.language ? ` · ${LANGUAGES[v.language]?.flag ?? ""} ${LANGUAGES[v.language]?.name ?? v.language}` : ""}
@@ -567,11 +579,13 @@ export default function TextToSpeech() {
           ))}
         </select>
         <div style={{ fontSize: 10, color: "var(--bamboo-500)", marginTop: 4, paddingLeft: 4 }}>
-          {voiceId
-            ? "Zero-shot clone of your Voice Library reference — no training needed."
-            : voices.length === 0
-              ? "Add a reference in the Voice Library to clone your own voice."
-              : "Using the built-in IndicF5 reference. Pick a Library voice to clone your own."}
+          {!isAuthenticated
+            ? "Sign in to clone and use your own voice."
+            : voiceId
+              ? "Zero-shot clone of your Voice Library reference — no training needed."
+              : voices.length === 0
+                ? "Add a reference in the Voice Library to clone your own voice."
+                : "Using the built-in IndicF5 reference. Pick a Library voice to clone your own."}
         </div>
       </div>
 

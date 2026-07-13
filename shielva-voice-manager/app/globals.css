@@ -1928,3 +1928,16 @@ input[type="range"].soap-seek::-moz-range-thumb {
   border-color: rgba(0,0,0,0.12) !important;
   color: #1a1a1a !important;
 }
+
+/* ── Accessibility utility: visually-hidden label (screen-reader only) ── */
+.vm-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}

@@ -148,19 +148,21 @@ export async function classifyIntent(text: string): Promise<IntentResult> {
   return res.json();
 }
 
-// ─── Speaker Encoder (Voices) ─────────────────────────────────────────────────
+// ─── Voices (IndicF5 zero-shot reference clips) ───────────────────────────────
+//
+// A "voice" is a stored reference clip that IndicF5 clones zero-shot. There is
+// no training, no speaker embedding, and no trained/untrained status — every
+// enrolled voice is immediately usable for synthesis.
 
 export interface VoiceInfo {
   voice_id: string;
   tenant_id: string;
-  embedding_dim?: number;
   sample_duration_ms?: number;
   created_at?: string;
-  // Extended metadata (stored locally + returned by training endpoint)
   name?: string;
   language?: string;
-  training_status?: "untrained" | "training" | "trained";
-  rvc_trained?: boolean;  // backend-verified: true if RVC model exists in MongoDB/R2
+  /** Transcript of the reference clip — improves zero-shot cloning fidelity. */
+  ref_text?: string;
 }
 
 export interface SessionTiming {
@@ -200,20 +202,45 @@ export async function listVoices(): Promise<{ voices: VoiceInfo[]; total: number
   return { ...data, voices: data.voices || [] };
 }
 
-export async function registerVoice(voiceId: string, audioBlob: Blob): Promise<VoiceInfo> {
-  const form = new FormData();
-  form.append("audio", audioBlob, "voice-sample.wav");
+export interface EnrollVoiceParams {
+  voiceId: string;
+  name: string;
+  /** ISO language code of the reference clip. Defaults to "en". */
+  language?: string;
+  /** Transcript of the clip — optional, speeds up IndicF5 synthesis. */
+  refText?: string;
+  /** One or more reference clips (WAV). At least one is required. */
+  clips: Blob[];
+}
 
-  const res = await fetch(`${AMT_BASE}/amt/v1/voices/register`, {
+/**
+ * Enroll a voice for IndicF5 zero-shot cloning via a single multipart POST.
+ *
+ * The server concatenates the clip(s), stores a speaker reference + transcript,
+ * backs the clip up to R2, and adds the voice to the library. It is fast — there
+ * is no training and no progress stream — and returns the stored VoiceInfo.
+ * Tenant scoping (incl. the human-readable R2 path via X-Tenant-Name) comes from
+ * `amtHeaders()`, which the caller must have populated via `setAmtAuthState`.
+ */
+export async function enrollVoice(params: EnrollVoiceParams): Promise<VoiceInfo> {
+  const form = new FormData();
+  form.append("voice_id", params.voiceId);
+  form.append("voice_name", params.name);
+  form.append("language", params.language || "en");
+  if (params.refText) form.append("ref_text", params.refText);
+  params.clips.forEach((blob, i) => form.append(`audio_${i}`, blob, `clip_${i}.wav`));
+
+  const res = await fetch(`${AMT_BASE}/amt/v1/voices/train`, {
     method: "POST",
-    headers: amtHeaders({ "X-Voice-ID": voiceId }),
+    // No Content-Type — the browser sets the multipart boundary itself.
+    headers: amtHeaders(),
     body: form,
     credentials: "include",
   });
   await handleQuotaError(res);
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`Voice registration failed: ${err}`);
+    throw new Error(`Voice enrollment failed: ${err}`);
   }
   return res.json();
 }
@@ -685,231 +712,4 @@ export async function saveLiveTranslationClip(
  */
 export async function getLiveTranslationClips(skip = 0, limit = 50): Promise<HistoryResponse> {
   return getHistory(skip, limit, "live_translation");
-}
-
-// ── Voice Training ────────────────────────────────────────────────────────────
-
-export interface VoiceTrainingResult {
-  voice_id: string;
-  status: "complete" | "registered" | "training";
-  duration_sec?: number;
-  engines_ready?: string[];
-  encoder_registered?: boolean;
-  r2_uploaded?: boolean;
-  rvc_uploaded?: boolean;
-}
-
-export interface VoiceTrainingStatus {
-  // Full set of states the backend streams (was narrowed to 3, which made the
-  // correct runtime handling of the terminal/queue states below dead-type-check).
-  status:
-    | "pending"
-    | "uploading_rvc"
-    | "processing"
-    | "complete"
-    | "failed"
-    | "not_found"
-    | "registered";
-  progress: number;
-  message?: string;
-  voice_id?: string;
-  duration_sec?: number;
-  engines_ready?: string[];
-  encoder_registered?: boolean;
-  r2_uploaded?: boolean;
-  rvc_uploaded?: boolean;
-}
-
-/**
- * Submit audio clips and stream training progress via SSE.
- * The backend returns text/event-stream with JSON progress events.
- * onProgress is called for each event (upload phase uses XHR progress, then SSE for backend steps).
- * Resolves with the final VoiceTrainingResult when status=complete.
- */
-export function submitVoiceTraining(
-  voiceId: string,
-  voiceName: string,
-  language: string,
-  audioBlobs: { blob: Blob; filename: string }[],
-  onProgress?: (status: VoiceTrainingStatus) => void,
-): Promise<VoiceTrainingResult> {
-  return new Promise((resolve, reject) => {
-    const form = new FormData();
-    form.append("voice_id", voiceId);
-    form.append("voice_name", voiceName);
-    form.append("language", language);
-    audioBlobs.forEach(({ blob, filename }, i) => {
-      form.append(`audio_${i}`, blob, filename);
-    });
-
-    const xhr = new XMLHttpRequest();
-    xhr.open("POST", `${AMT_BASE}/amt/v1/voices/train`);
-    xhr.withCredentials = true;
-
-    const hdrs = amtHeaders();
-    Object.entries(hdrs).forEach(([k, v]) => xhr.setRequestHeader(k, v));
-
-    // Phase 1: Upload progress (0–15%)
-    const fmtBytes = (b: number) => b < 1024 * 1024
-      ? `${(b / 1024).toFixed(0)} KB`
-      : `${(b / (1024 * 1024)).toFixed(1)} MB`;
-
-    xhr.upload.onprogress = (e) => {
-      if (e.lengthComputable && onProgress) {
-        const ratio = e.loaded / e.total;
-        const uploadPct = Math.round(ratio * 15);
-        const loaded = fmtBytes(e.loaded);
-        const total = fmtBytes(e.total);
-        onProgress({
-          status: "processing",
-          progress: uploadPct,
-          message: ratio < 1
-            ? `Uploading clips… ${loaded} / ${total}`
-            : `Upload complete — waiting for server…`,
-        });
-      }
-    };
-
-    xhr.upload.onload = () => {
-      onProgress?.({ status: "processing", progress: 15, message: "Audio received — processing clips…" });
-    };
-
-    // Phase 2: SSE stream from backend (15–100%)
-    let lastResult: VoiceTrainingResult | null = null;
-    let sseBuffer = "";
-
-    xhr.onprogress = () => {
-      // XHR streams text/event-stream — parse SSE events incrementally
-      const text = xhr.responseText.substring(sseBuffer.length);
-      sseBuffer = xhr.responseText;
-      const lines = text.split("\n");
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const data: VoiceTrainingStatus = JSON.parse(line.slice(6));
-            onProgress?.(data);
-            if (data.status === "complete") {
-              lastResult = {
-                voice_id: data.voice_id || voiceId,
-                status: "complete",
-                duration_sec: data.duration_sec,
-                engines_ready: data.engines_ready,
-                encoder_registered: data.encoder_registered,
-                r2_uploaded: data.r2_uploaded,
-                rvc_uploaded: data.rvc_uploaded,
-              };
-            }
-          } catch { /* skip malformed events */ }
-        }
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        if (lastResult) {
-          resolve(lastResult);
-        } else {
-          // Fallback: try parsing as plain JSON (backwards compat)
-          try { resolve(JSON.parse(xhr.responseText)); }
-          catch { reject(new Error("No valid training result received")); }
-        }
-      } else {
-        reject(new Error(`Voice training failed (${xhr.status}): ${xhr.responseText}`));
-      }
-    };
-
-    xhr.onerror = () => reject(new Error("Network error during voice training"));
-    xhr.ontimeout = () => reject(new Error("Voice training timed out"));
-    xhr.timeout = 180_000; // 3 min max
-
-    xhr.send(form);
-  });
-}
-
-/**
- * Poll training job status for VITS async training jobs.
- * Not needed for XTTS v2 (status is "registered" immediately).
- */
-export async function getVoiceTrainingStatus(
-  voiceId: string,
-): Promise<VoiceTrainingStatus> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/voices/${encodeURIComponent(voiceId)}/train/status`, {
-    credentials: "include",
-    headers: amtHeaders(),
-  });
-  if (!res.ok) throw new Error("Failed to fetch training status");
-  return res.json();
-}
-
-/**
- * Subscribe to real-time training progress via SSE.
- * Returns a cleanup function — call it to close the connection.
- */
-export function subscribeVoiceTrainingStatus(
-  voiceId: string,
-  onEvent: (status: VoiceTrainingStatus) => void,
-  onDone?: () => void,
-): () => void {
-  // EventSource doesn't support custom headers; pass tenant via query param for public sessions.
-  // For authenticated users the JWT cookie is sent automatically (withCredentials).
-  const sessionId = _tenantId ? null : getPublicSessionId();
-  const qs = sessionId ? `?sid=${encodeURIComponent(sessionId)}` : "";
-  const url = `${AMT_BASE}/amt/v1/voices/${encodeURIComponent(voiceId)}/train/status/stream${qs}`;
-  const es = new EventSource(url, { withCredentials: true });
-  es.onmessage = (e) => {
-    try {
-      const data: VoiceTrainingStatus = JSON.parse(e.data);
-      onEvent(data);
-      // Terminal states: complete, failed, not_found, registered (no active job)
-      if (data.status === "complete" || data.status === "failed" ||
-          data.status === "not_found" || data.status === "registered") {
-        es.close();
-        onDone?.();
-      }
-    } catch {}
-  };
-  es.onerror = () => { es.close(); onDone?.(); };
-  return () => es.close();
-}
-
-/**
- * Manually trigger RVC model training for an already-registered voice.
- * The speaker_ref.wav must exist on the server (uploaded during initial registration).
- * Training runs in the background; subscribe to subscribeVoiceTrainingStatus for progress.
- */
-export async function cancelRvcTraining(voiceId: string): Promise<{ status: string; message?: string }> {
-  try {
-    const res = await fetch(`${AMT_BASE}/amt/v1/voices/${encodeURIComponent(voiceId)}/rvc/train`, {
-      method: "DELETE",
-      headers: amtHeaders(),
-      credentials: "include",
-    });
-    if (!res.ok) return { status: "error", message: `HTTP ${res.status}` };
-    return res.json();
-  } catch (e) {
-    return { status: "error", message: String(e) };
-  }
-}
-
-export async function triggerRvcTraining(
-  voiceId: string,
-  options: { nSteps?: number; f0UpKey?: number; indexRate?: number } = {}
-): Promise<{ status: string; message: string }> {
-  const params = new URLSearchParams();
-  params.set("n_steps", String(options.nSteps ?? 1500));
-  if (options.f0UpKey !== undefined) params.set("f0_up_key", String(options.f0UpKey));
-  if (options.indexRate !== undefined) params.set("index_rate", String(options.indexRate));
-  const res = await fetch(
-    `${AMT_BASE}/amt/v1/voices/${encodeURIComponent(voiceId)}/rvc/train?${params}`,
-    {
-      method: "POST",
-      headers: amtHeaders(),
-      credentials: "include",
-    }
-  );
-  if (!res.ok) {
-    const detail = await res.text().catch(() => `HTTP ${res.status}`);
-    throw new Error(detail || `HTTP ${res.status}`);
-  }
-  return res.json();
 }

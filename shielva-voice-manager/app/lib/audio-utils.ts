@@ -14,7 +14,9 @@ export function recordMic(
     resolver = resolve;
 
     navigator.mediaDevices
-      .getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true } })
+      // AEC/NS/AGC on: without echo cancellation the bot's own TTS audio leaks
+      // into the mic and self-triggers barge-in.
+      .getUserMedia({ audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true, autoGainControl: true } })
       .then((stream) => {
         const audioCtx = new AudioContext({ sampleRate: 16000 });
         const source = audioCtx.createMediaStreamSource(stream);
