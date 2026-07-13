@@ -334,10 +334,10 @@ export async function enrollVoice(params: EnrollVoiceParams): Promise<VoiceInfo>
 }
 
 export async function fetchVoiceAudio(voiceId: string): Promise<Blob> {
-  // The voice-audio reader lives behind the gateway (R2), so it needs the Shielva
-  // session cookie — call GATEWAY_BASE directly (cookie host-scoped there); via
-  // AMT_BASE (voice.shielva.ai) the cookie isn't sent → 401.
-  const res = await fetch(`${GATEWAY_BASE}/amt/v1/voices/${voiceId}/audio`, {
+  // The enrolling POD owns the reference clip (disk-first, R2 fallback), so the
+  // audio is served from AMT_BASE (voice.shielva.ai → :8203) — NOT the cluster
+  // amt-api, which never saw pod-enrolled voices and 404s. No cookie needed.
+  const res = await fetch(`${AMT_BASE}/amt/v1/voices/${voiceId}/audio`, {
     headers: amtHeaders(),
     credentials: "include",
   });
