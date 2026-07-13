@@ -5,7 +5,12 @@ import { setAmtAuthState } from '../lib/amt-api';
 import { redirectToLogin } from '../lib/login-redirect';
 
 const IDENTITY_URL = process.env.NEXT_PUBLIC_IDENTITY_URL || 'https://localhost:8009';
+// Inference routes (pod, no auth) go via the single-origin tunnel.
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://localhost:8000';
+// Gateway-auth'd DB routes (metering, session) require the session cookie, which
+// is host-scoped to the identity/gateway host — so they must be called there,
+// not via API_BASE (voice.shielva.ai), or the cookie is never sent → 401.
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_IDENTITY_URL || 'https://api.shielva.ai';
 
 interface User {
     id: string;
@@ -56,7 +61,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     const refreshUsage = useCallback(async () => {
         try {
-            const res = await fetch(`${API_BASE}/amt/v1/metering/usage`, { credentials: 'include' });
+            const res = await fetch(`${GATEWAY_BASE}/amt/v1/metering/usage`, { credentials: 'include' });
             if (res.ok) {
                 setUsageInfo(await res.json());
             }
@@ -76,15 +81,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                         id: data.id || data.sub || '',
                         name: data.name || data.full_name || '',
                         email: data.email || '',
-                        tenants: data.tenants || [],
+                        // /me returns tenant_id (string), not a tenants[] array — normalise so
+                        // downstream consumers (and AMT tenant scoping) always have the tenant.
+                        tenants: data.tenants || (data.tenant_id ? [data.tenant_id] : []),
                         role: data.role,
                         globalPersona: data.globalPersona,
                     };
                     userRef.current = u;
                     setUser(u);
-                    setAmtAuthState(true, data.tenants?.[0], data.tenant_name || '');
+                    // tenant_id is the canonical field on /me; tenants[0] is a legacy fallback.
+                    // Without this, _tenantId stays null and amtHeaders() omits X-Tenant-Name,
+                    // so every authenticated AMT call (synthesize/transcribe/enroll) 422s.
+                    setAmtAuthState(true, data.tenant_id || data.tenants?.[0], data.tenant_name || '');
                     // Purge stale R2 temp cache on login (best-effort, non-blocking)
-                    fetch(`${API_BASE}/amt/v1/session/logout`, {
+                    fetch(`${GATEWAY_BASE}/amt/v1/session/logout`, {
                         method: 'POST',
                         credentials: 'include',
                     }).catch(() => { /* non-fatal */ });
@@ -107,24 +117,28 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     // Cross-app SSO: re-validate on tab focus.
     useEffect(() => {
-        const loginRoot = (process.env.NEXT_PUBLIC_AUTH_URL || 'https://localhost:3000').replace(/\/$/, '');
         const handleVisibility = async () => {
             if (document.visibilityState !== 'visible') return;
             if (isLoadingRef.current) return;
             try {
-                const res = await fetch(`${API_BASE}/identity/api/v1/unified/me`, { credentials: 'include' });
+                // Must hit IDENTITY_URL (identity/gateway host that owns the session
+                // cookie) — API_BASE (voice.shielva.ai) never carries the host-scoped
+                // cookie, so /me there 401s → forced logout → login-redirect loop.
+                const res = await fetch(`${IDENTITY_URL}/identity/api/v1/unified/me`, { credentials: 'include' });
                 if (res.ok) {
                     const data = await res.json() as Record<string, unknown>;
+                    const tenantId = (data.tenant_id as string) || (data.tenants as string[])?.[0];
                     const u: User = {
                         id: (data.id || data.sub || '') as string,
                         name: (data.name as string) || '',
                         email: (data.email as string) || '',
-                        tenants: (data.tenants as string[]) || [],
+                        tenants: (data.tenants as string[]) || (tenantId ? [tenantId] : []),
                         role: data.role as string | undefined,
                         globalPersona: data.globalPersona as string | undefined,
                     };
                     userRef.current = u;
                     setUser(u);
+                    setAmtAuthState(true, tenantId, (data.tenant_name as string) || '');
                     setSessionRejected(false);
                 } else if (res.status === 401 || res.status === 403) {
                     if (!userRef.current) return;
@@ -132,8 +146,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     setAmtAuthState(false);
                     setUser(null);
                     setSessionRejected(true);
-                    const returnTo = encodeURIComponent(window.location.origin);
-                    window.location.href = `${loginRoot}?return_to=${returnTo}`;
+                    // Go through the proper login-session flow (lands on the actual
+                    // form), not the login splash page via a manual return_to redirect.
+                    redirectToLogin();
                 }
             } catch {}
         };
@@ -165,7 +180,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         // the server session cookie + cross-app sync + expire readable cookies.
 
         // 1. R2 cache purge for this tenant (voice-manager specific; best-effort).
-        fetch(`${API_BASE}/amt/v1/session/logout`, {
+        fetch(`${GATEWAY_BASE}/amt/v1/session/logout`, {
             method: 'POST',
             credentials: 'include',
         }).catch(() => { /* non-fatal */ });
@@ -176,7 +191,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             const csrf = document.cookie.match(/(?:^|;\s*)csrf_token=([^;]+)/)?.[1];
             const headers: Record<string, string> = { 'Content-Type': 'application/json' };
             if (csrf) headers['X-CSRF-Token'] = decodeURIComponent(csrf);
-            await fetch(`${API_BASE}/identity/api/v1/unified/logout`, {
+            // Identity/unified route → IDENTITY_URL (session-cookie host), never API_BASE.
+            await fetch(`${IDENTITY_URL}/identity/api/v1/unified/logout`, {
                 method: 'POST',
                 credentials: 'include',
                 headers,

@@ -1,4 +1,12 @@
+// Inference routes (synthesize / transcribe / voices / translate / realtime) hit
+// the AMT pod directly via the single-origin tunnel — no gateway session needed.
 const AMT_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8000";
+
+// Gateway-auth'd DB routes (metering / history / storage / session / sync /
+// live-translation) require the Shielva session cookie, which is host-scoped to
+// the identity/gateway host. Calling them there (cross-origin, CORS already
+// allows the UI origin) sends the cookie; calling them via AMT_BASE would not.
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_IDENTITY_URL || "https://api.shielva.ai";
 
 // ─── Public Session ID ─────────────────────────────────────────────────────────
 // Persisted in localStorage. Cleared when the user signs in.
@@ -30,35 +38,43 @@ export function getPublicSessionExpiresAt(): number { return Date.now() + 365 * 
 // tenantName comes from JWT tenant_name (org_name) — used for human-readable R2 paths.
 let _tenantId: string | null = null;
 let _tenantName: string | null = null;
+// Whether the tenant backs up voice refs + generated audio to R2. Driven by the
+// storage mode (cloud → true, local-only → false) via setCloudBackup(). Default
+// true so cloud users (the default mode) get R2 backup; the backend also defaults
+// X-Cloud-Backup on, so an unset header still backs up.
+let _cloudBackup = true;
 
 export function setAmtAuthState(authenticated: boolean, tenantId?: string, tenantName?: string): void {
   _tenantId = authenticated && tenantId ? tenantId : null;
   _tenantName = authenticated && tenantName ? tenantName : null;
 }
 
+/** Toggle R2 cloud backup for AMT writes (enroll + synthesis) — driven by storage mode. */
+export function setCloudBackup(enabled: boolean): void {
+  _cloudBackup = enabled;
+}
+
 function amtHeaders(extra?: Record<string, string>): Record<string, string> {
+  // X-Cloud-Backup tells the backend whether to persist writes to R2 (cloud) or
+  // keep them off-cloud (local-only tenants).
+  const backup = { "X-Cloud-Backup": _cloudBackup ? "1" : "0" };
   // Authenticated: pass tenant_id and tenant_name so services use human-readable R2 paths.
   if (_tenantId) {
     return {
       "X-Tenant-ID": _tenantId,
       ...(_tenantName ? { "X-Tenant-Name": _tenantName } : {}),
+      ...backup,
       ...extra,
     };
   }
   // Unauthenticated: scope by permanent session UUID.
-  return { "X-AMT-Session-ID": getPublicSessionId(), ...extra };
+  return { "X-AMT-Session-ID": getPublicSessionId(), ...backup, ...extra };
 }
-
-const ACOUSTIC = process.env.NEXT_PUBLIC_AMT_ACOUSTIC_URL || "https://localhost:8200";
-const INTENT = process.env.NEXT_PUBLIC_AMT_INTENT_URL || "https://localhost:8201";
-const INDICF5_TTS = process.env.NEXT_PUBLIC_AMT_TTS_URL || "https://localhost:8203";
-const TRANSLATOR = process.env.NEXT_PUBLIC_AMT_TRANSLATOR_URL || "https://localhost:8205";
 
 // ─── Health ───────────────────────────────────────────────────────────────────
 
 export interface ServiceHealth {
   name: string;
-  url: string;
   /** online=green, warming=amber (model loading), offline=red, loading=initial check */
   status: "online" | "warming" | "offline" | "loading";
   detail?: string;
@@ -69,23 +85,43 @@ export interface ServiceHealth {
 // zero-shot from a reference clip, so neither a speaker embedding nor a separate
 // vocoder exists anymore.
 export const SERVICES = [
-  { key: "acoustic", label: "Speech-to-Text", url: ACOUSTIC },
-  { key: "intent", label: "Intent", url: INTENT },
-  { key: "shielva-tts", label: "Text-to-Speech", url: INDICF5_TTS },
-  { key: "translator", label: "Translation", url: TRANSLATOR },
+  { key: "acoustic", label: "Speech-to-Text" },
+  { key: "intent", label: "Intent" },
+  { key: "shielva-tts", label: "Text-to-Speech" },
+  { key: "translator", label: "Translation" },
 ] as const;
 
-export async function checkHealth(baseUrl: string): Promise<{ ok: boolean; loading?: boolean; detail?: string }> {
+interface AmtHealthResponse {
+  services: Record<string, { status: "ok" | "loading" | "offline"; name?: string }>;
+}
+
+/**
+ * Fetch aggregate health for every AMT service in ONE request.
+ *
+ * The tunnel routes `${AMT_BASE}/amt/v1/health` to the TTS pod, which probes the
+ * four pod services (acoustic/intent/shielva-tts/translator) over loopback. This
+ * replaces four per-service `https://localhost:820x/health` calls the browser
+ * could never reach through the single-origin tunnel. Always resolves — a failed
+ * request marks every service offline rather than throwing.
+ */
+export async function fetchAmtHealth(): Promise<Record<string, ServiceHealth>> {
+  const result: Record<string, ServiceHealth> = {};
   try {
-    const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(30000) });
-    if (!res.ok) return { ok: false, detail: `HTTP ${res.status}` };
-    const data = await res.json();
-    // "loading" means the service is up but still warming up models — show as online (amber)
-    if (data.status === "loading") return { ok: true, loading: true, detail: `${data.service} (warming up…)` };
-    return { ok: data.status === "ok", detail: data.service };
+    const res = await fetch(`${AMT_BASE}/amt/v1/health`, { signal: AbortSignal.timeout(10000) });
+    const data: AmtHealthResponse = res.ok ? await res.json() : { services: {} };
+    for (const svc of SERVICES) {
+      const status = data.services?.[svc.key]?.status;
+      result[svc.key] = {
+        name: svc.label,
+        status: status === "ok" ? "online" : status === "loading" ? "warming" : "offline",
+      };
+    }
   } catch {
-    return { ok: false, detail: "unreachable" };
+    for (const svc of SERVICES) {
+      result[svc.key] = { name: svc.label, status: "offline" };
+    }
   }
+  return result;
 }
 
 // ─── 429 handler ──────────────────────────────────────────────────────────────
@@ -178,7 +214,7 @@ export interface SessionTiming {
  */
 export async function fetchSessionTiming(): Promise<SessionTiming | null> {
   try {
-    const res = await fetch(`${AMT_BASE}/amt/v1/session`, {
+    const res = await fetch(`${GATEWAY_BASE}/amt/v1/session`, {
       headers: amtHeaders(),
       credentials: "include",
     });
@@ -286,16 +322,16 @@ export async function deleteVoiceFull(voiceId: string, voiceName?: string): Prom
 // ─── Storage config ───────────────────────────────────────────────────────────
 
 export interface StorageConfig {
-  rvc_models_dir: string;
+  voice_refs_dir: string;
   path_exists: boolean;
   free_gb: number | null;
   total_gb: number | null;
   cdn_service_url: string;
-  rvc_models_bucket: string;
+  voice_bucket: string;
 }
 
 export async function getStorageConfig(): Promise<StorageConfig> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/storage/config`, {
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/storage/config`, {
     headers: amtHeaders(),
     credentials: "include",
   });
@@ -303,12 +339,12 @@ export async function getStorageConfig(): Promise<StorageConfig> {
   return res.json();
 }
 
-export async function setStorageConfig(rvcModelsDir: string): Promise<StorageConfig & { ok: boolean }> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/storage`, {
+export async function setStorageConfig(voiceRefsDir: string): Promise<StorageConfig & { ok: boolean }> {
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/storage`, {
     method: "POST",
     headers: { ...amtHeaders(), "Content-Type": "application/json" },
     credentials: "include",
-    body: JSON.stringify({ rvc_models_dir: rvcModelsDir }),
+    body: JSON.stringify({ voice_refs_dir: voiceRefsDir }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
@@ -622,13 +658,13 @@ export interface HistoryStats {
 export async function getHistory(skip = 0, limit = 10, feature?: string): Promise<HistoryResponse> {
   const params = new URLSearchParams({ skip: String(skip), limit: String(limit) });
   if (feature) params.set("feature", feature);
-  const res = await fetch(`${AMT_BASE}/amt/v1/history?${params}`, { credentials: "include" });
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/history?${params}`, { credentials: "include" });
   if (!res.ok) throw new Error("Failed to fetch history");
   return res.json();
 }
 
 export async function deleteHistoryItem(id: string): Promise<void> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/history/${id}`, {
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/history/${id}`, {
     method: "DELETE",
     credentials: "include",
   });
@@ -636,7 +672,7 @@ export async function deleteHistoryItem(id: string): Promise<void> {
 }
 
 export async function getHistoryStats(): Promise<HistoryStats> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/history/stats`, { credentials: "include" });
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/history/stats`, { credentials: "include" });
   if (!res.ok) throw new Error("Failed to fetch stats");
   return res.json();
 }
@@ -657,7 +693,7 @@ export interface SyncResult {
  * (TTS, STT, live_translation, vocoder, etc.).
  */
 export async function syncToLocal(): Promise<SyncResult> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/sync`, {
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/sync`, {
     method:      "POST",
     headers:     amtHeaders({ "Content-Type": "application/json" }),
     credentials: "include",
@@ -696,7 +732,7 @@ export async function saveLiveTranslationClip(
   form.append("translation", meta.translation);
   form.append("timestamp",   String(meta.timestamp));
 
-  const res = await fetch(`${AMT_BASE}/amt/v1/live-translation/clips`, {
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/live-translation/clips`, {
     method:      "POST",
     headers:     amtHeaders(),   // tenant auth headers (no Content-Type — let browser set multipart boundary)
     body:        form,

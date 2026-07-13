@@ -28,7 +28,7 @@ export default function StoragePathWidget() {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
         <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-secondary)", letterSpacing: "0.04em", textTransform: "uppercase" }}>
-          Model Storage
+          Voice Storage
         </span>
         <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
           {/* Mode badge */}
@@ -63,7 +63,7 @@ export default function StoragePathWidget() {
               border: "1px solid var(--border-primary)", borderRadius: 6,
               padding: "6px 10px", lineHeight: 1.4,
             }}>
-              R2 › {config?.rvc_models_bucket ?? "shielva-rvc-models"}
+              R2 › {config?.voice_bucket ?? "shielvasense-voice-synthesis"}
             </div>
             <span style={{
               fontSize: 11, fontWeight: 500, padding: "4px 10px", borderRadius: 6,
@@ -132,7 +132,7 @@ export default function StoragePathWidget() {
           </div>
           {isCloud && (
             <div style={{ fontSize: 11, color: "var(--text-tertiary)", marginLeft: "auto" }}>
-              R2: <span style={{ color: "var(--text-secondary)", fontWeight: 500 }}>{config.rvc_models_bucket}</span>
+              R2: <span style={{ color: "var(--text-secondary)", fontWeight: 500 }}>{config.voice_bucket}</span>
             </div>
           )}
         </div>
@@ -142,8 +142,8 @@ export default function StoragePathWidget() {
       <div style={{ marginTop: 10, fontSize: 11, color: "var(--text-tertiary)", lineHeight: 1.5 }}>
         {isCloud
           ? settings.localCacheEnabled
-            ? "Local cache read first → R2 on miss. Models auto-restored from cloud if local is missing."
-            : "Models stored in R2. Auto-restored from cloud if local is missing."
+            ? "Local cache read first → R2 on miss. Voice references auto-restored from cloud if local is missing."
+            : "Voice references stored in R2. Auto-restored from cloud if local is missing."
           : settings.isPersistent
             ? "Persistent local storage — files kept between sessions."
             : "Temporary local storage — files may be cleared between sessions."

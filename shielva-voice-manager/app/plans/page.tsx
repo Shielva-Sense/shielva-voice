@@ -7,7 +7,10 @@ import { notify } from "../lib/toast";
 import Link from "next/link";
 import "./plans.css";
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8000";
+// Metering routes are gateway-auth'd DB routes — they need the session cookie,
+// host-scoped to the identity/gateway host, so they must be called there (not
+// via voice.shielva.ai) or the cookie is never sent → 401.
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_IDENTITY_URL || "https://api.shielva.ai";
 
 /* ─── Plan Definitions ─── */
 
@@ -100,7 +103,7 @@ export default function PlansPage() {
   useEffect(() => {
     const fetchPlans = async () => {
       try {
-        const res = await fetch(`${API_BASE}/amt/v1/metering/plans`, {
+        const res = await fetch(`${GATEWAY_BASE}/amt/v1/metering/plans`, {
           credentials: "include",
         });
         if (res.ok) {
@@ -120,7 +123,7 @@ export default function PlansPage() {
   const refreshUsage = useCallback(async () => {
     if (!isAuthenticated) return;
     try {
-      const res = await fetch(`${API_BASE}/amt/v1/metering/usage`, {
+      const res = await fetch(`${GATEWAY_BASE}/amt/v1/metering/usage`, {
         credentials: "include",
       });
       if (res.ok) {
@@ -147,7 +150,7 @@ export default function PlansPage() {
     }
     setSubscribing(planKey);
     try {
-      const res = await fetch(`${API_BASE}/amt/v1/metering/subscribe`, {
+      const res = await fetch(`${GATEWAY_BASE}/amt/v1/metering/subscribe`, {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },

@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { LogIn, LogOut, User, Crown, Sun, Moon, Cloud, HardDrive } from "lucide-react";
 import Image from "next/image";
-import { SERVICES, checkHealth, type ServiceHealth } from "./lib/amt-api";
+import { SERVICES, fetchAmtHealth, type ServiceHealth } from "./lib/amt-api";
 import SessionTimer from "./components/SessionTimer";
 import SpeechToText from "./components/SpeechToText";
 import TextToSpeech from "./components/TextToSpeech";
@@ -44,20 +44,7 @@ export default function Home() {
   }, [theme]);
 
   const refreshHealth = useCallback(async () => {
-    const results: Record<string, ServiceHealth> = {};
-    await Promise.all(
-      SERVICES.map(async (svc) => {
-        const h = await checkHealth(svc.url);
-        results[svc.key] = {
-          name: svc.label,
-          url: svc.url,
-          // ok + loading = model still warming up (amber), ok alone = green, else red
-          status: h.ok ? (h.loading ? "warming" : "online") : "offline",
-          detail: h.detail,
-        };
-      })
-    );
-    setHealth(results);
+    setHealth(await fetchAmtHealth());
   }, []);
 
   useEffect(() => {

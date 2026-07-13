@@ -2,6 +2,7 @@
 
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { listVoices, type VoiceInfo } from "../lib/amt-api";
+import { useAuth } from "../context/AuthContext";
 
 export const VOICES_KEY = ["voices"] as const;
 
@@ -15,9 +16,16 @@ export const VOICES_KEY = ["voices"] as const;
  * which callers render as a graceful empty state.
  */
 export function useVoices() {
+  // The list is tenant-scoped via amtHeaders() (X-Tenant-Name), which AuthContext
+  // populates only after /me resolves. Gate the query on the tenant being ready so
+  // it doesn't fire anonymously on mount (→ empty list) and never refetch; React
+  // Query runs it the moment auth settles.
+  const { isAuthenticated, user } = useAuth();
+  const ready = isAuthenticated && !!user?.tenants?.[0];
   const query = useQuery({
     queryKey: VOICES_KEY,
     queryFn: async (): Promise<VoiceInfo[]> => (await listVoices()).voices,
+    enabled: ready,
     staleTime: 30_000,
     retry: 0,
   });

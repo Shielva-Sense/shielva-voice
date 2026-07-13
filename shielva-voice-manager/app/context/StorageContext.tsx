@@ -39,8 +39,12 @@ import React, {
   useRef,
 } from "react";
 import { useAuth } from "./AuthContext";
+import { setCloudBackup } from "../lib/amt-api";
 
-const AMT_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8000";
+// Storage routes are gateway-auth'd DB routes — they require the session cookie,
+// host-scoped to the identity/gateway host, so they must be called there (not via
+// voice.shielva.ai / API_URL) or the cookie is never sent → 401.
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_IDENTITY_URL || "https://api.shielva.ai";
 const LS_KEY = "vm-storage-v2";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -211,7 +215,7 @@ export function StorageProvider({ children }: { children: React.ReactNode }) {
   /** Write to MongoDB via gateway (async, best-effort). */
   const persistRemote = useCallback(async (next: StorageSettings) => {
     try {
-      await fetch(`${AMT_BASE}/amt/v1/storage/config`, {
+      await fetch(`${GATEWAY_BASE}/amt/v1/storage/config`, {
         method:      "PUT",
         headers:     { "Content-Type": "application/json" },
         credentials: "include",
@@ -247,7 +251,7 @@ export function StorageProvider({ children }: { children: React.ReactNode }) {
 
     // 2. Fetch from MongoDB (authoritative) and reconcile
     setConfigLoading(true);
-    fetch(`${AMT_BASE}/amt/v1/storage/config`, { credentials: "include" })
+    fetch(`${GATEWAY_BASE}/amt/v1/storage/config`, { credentials: "include" })
       .then((r) => (r.ok ? r.json() : null))
       .then((remote: Partial<StorageSettings> | null) => {
         if (remote && Object.keys(remote).length > 0) {
@@ -262,6 +266,13 @@ export function StorageProvider({ children }: { children: React.ReactNode }) {
       })
       .finally(() => setConfigLoading(false));
   }, [isAuthenticated, isLoading, persistLocal]);
+
+  // ── Drive R2 cloud-backup off the storage mode ────────────────────────────
+  // cloud mode → back up voice refs + generated audio to R2; local-only → don't.
+  // amtHeaders() reads this to set X-Cloud-Backup on every AMT write.
+  useEffect(() => {
+    setCloudBackup(settings.mode === "cloud");
+  }, [settings.mode]);
 
   // ── Re-apply public defaults on logout ────────────────────────────────────
 
@@ -314,7 +325,7 @@ export function StorageProvider({ children }: { children: React.ReactNode }) {
     async (feature: keyof LocalPaths, path: string): Promise<boolean> => {
       setOneValidation(feature, "pending");
       try {
-        const res = await fetch(`${AMT_BASE}/amt/v1/storage/validate-path`, {
+        const res = await fetch(`${GATEWAY_BASE}/amt/v1/storage/validate-path`, {
           method:      "POST",
           headers:     { "Content-Type": "application/json" },
           credentials: "include",
@@ -373,11 +384,11 @@ export function StorageProvider({ children }: { children: React.ReactNode }) {
         : settings.localPaths[feature];
       const localPath = `${baseDir.replace(/\/$/, "")}/${filename}`;
       // Gateway-proxied local-serve URL (the gateway streams the file)
-      const localUrl  = `${AMT_BASE}/amt/v1/storage/serve-local?path=${encodeURIComponent(localPath)}`;
+      const localUrl  = `${GATEWAY_BASE}/amt/v1/storage/serve-local?path=${encodeURIComponent(localPath)}`;
 
       try {
         const res  = await fetch(
-          `${AMT_BASE}/amt/v1/storage/file-exists?path=${encodeURIComponent(localPath)}`,
+          `${GATEWAY_BASE}/amt/v1/storage/file-exists?path=${encodeURIComponent(localPath)}`,
           { credentials: "include" },
         );
         const data = await res.json();

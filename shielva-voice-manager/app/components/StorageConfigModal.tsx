@@ -17,7 +17,10 @@ import {
   ALL_PATH_KEYS,
 } from "../context/StorageContext";
 
-const AMT_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8000";
+// storage/list-dir is a gateway-auth'd DB route — it needs the session cookie,
+// host-scoped to the identity/gateway host, so it must be called there (not via
+// voice.shielva.ai / API_URL) or the cookie is never sent → 401.
+const GATEWAY_BASE = process.env.NEXT_PUBLIC_IDENTITY_URL || "https://api.shielva.ai";
 
 /** Single representative key used for the unified path input. */
 const UNIFIED_KEY: keyof LocalPaths = "tts";
@@ -52,7 +55,7 @@ function DirBrowser({ initialPath, onSelect, onClose }: DirBrowserProps) {
     setError("");
     try {
       const res = await fetch(
-        `${AMT_BASE}/amt/v1/storage/list-dir?path=${encodeURIComponent(path)}`,
+        `${GATEWAY_BASE}/amt/v1/storage/list-dir?path=${encodeURIComponent(path)}`,
         { credentials: "include" },
       );
       const data = await res.json();
