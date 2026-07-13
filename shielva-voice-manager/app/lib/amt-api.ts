@@ -334,7 +334,10 @@ export async function enrollVoice(params: EnrollVoiceParams): Promise<VoiceInfo>
 }
 
 export async function fetchVoiceAudio(voiceId: string): Promise<Blob> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/voices/${voiceId}/audio`, {
+  // The voice-audio reader lives behind the gateway (R2), so it needs the Shielva
+  // session cookie — call GATEWAY_BASE directly (cookie host-scoped there); via
+  // AMT_BASE (voice.shielva.ai) the cookie isn't sent → 401.
+  const res = await fetch(`${GATEWAY_BASE}/amt/v1/voices/${voiceId}/audio`, {
     headers: amtHeaders(),
     credentials: "include",
   });
