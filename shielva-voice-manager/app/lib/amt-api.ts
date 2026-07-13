@@ -295,7 +295,7 @@ export interface StorageConfig {
 }
 
 export async function getStorageConfig(): Promise<StorageConfig> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/storage`, {
+  const res = await fetch(`${AMT_BASE}/amt/v1/storage/config`, {
     headers: amtHeaders(),
     credentials: "include",
   });
