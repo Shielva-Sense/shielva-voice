@@ -66,6 +66,7 @@ export default function VoiceTraining() {
   const [recordSec, setRecordSec] = useState(0);
   const [decoding, setDecoding] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [progressMsg, setProgressMsg] = useState("");
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -139,6 +140,7 @@ export default function VoiceTraining() {
   const handleSubmit = async () => {
     if (!canSubmit || !clip) return;
     setSubmitting(true);
+    setProgressMsg("");
     const trimmedName = voiceName.trim();
     const voiceId = genVoiceId(trimmedName);
     try {
@@ -148,6 +150,7 @@ export default function VoiceTraining() {
         language,
         refText: refText.trim() || undefined,
         clips: [clip.blob],
+        onProgress: (evt) => { if (evt.message) setProgressMsg(evt.message); },
       });
       upsertVoice({
         ...voice,
@@ -168,6 +171,7 @@ export default function VoiceTraining() {
       else notify.error("Cloning failed", err instanceof Error ? err.message : "Could not enroll the voice.");
     } finally {
       setSubmitting(false);
+      setProgressMsg("");
     }
   };
 
@@ -354,7 +358,7 @@ export default function VoiceTraining() {
         {submitting ? (
           <>
             <div className="vm-spinner" style={{ width: 14, height: 14 }} />
-            Cloning voice…
+            {progressMsg || "Cloning voice…"}
           </>
         ) : (
           <>

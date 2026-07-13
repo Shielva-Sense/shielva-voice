@@ -238,6 +238,14 @@ export async function listVoices(): Promise<{ voices: VoiceInfo[]; total: number
   return { ...data, voices: data.voices || [] };
 }
 
+/** A single progress frame emitted by the enroll SSE stream. */
+export interface EnrollProgressEvent {
+  progress?: number;
+  message?: string;
+  status?: string;
+  voice_id?: string;
+}
+
 export interface EnrollVoiceParams {
   voiceId: string;
   name: string;
@@ -247,14 +255,18 @@ export interface EnrollVoiceParams {
   refText?: string;
   /** One or more reference clips (WAV). At least one is required. */
   clips: Blob[];
+  /** Invoked for each progress frame streamed during enrollment. */
+  onProgress?: (event: EnrollProgressEvent) => void;
 }
 
 /**
  * Enroll a voice for IndicF5 zero-shot cloning via a single multipart POST.
  *
- * The server concatenates the clip(s), stores a speaker reference + transcript,
- * backs the clip up to R2, and adds the voice to the library. It is fast — there
- * is no training and no progress stream — and returns the stored VoiceInfo.
+ * The endpoint responds with a Server-Sent Events stream (`text/event-stream`):
+ * each `data: {…}` line is a JSON progress frame, ending with a final frame
+ * carrying `status: "complete"` plus the stored VoiceInfo. We read the stream,
+ * forward each frame to `onProgress`, and resolve with the final frame — calling
+ * `res.json()` on this body would choke on the `data: ` prefix.
  * Tenant scoping (incl. the human-readable R2 path via X-Tenant-Name) comes from
  * `amtHeaders()`, which the caller must have populated via `setAmtAuthState`.
  */
@@ -278,7 +290,47 @@ export async function enrollVoice(params: EnrollVoiceParams): Promise<VoiceInfo>
     const err = await res.text();
     throw new Error(`Voice enrollment failed: ${err}`);
   }
-  return res.json();
+
+  // No stream (shouldn't happen) — fall back to a single JSON parse.
+  if (!res.body) return res.json();
+
+  // Parse the SSE stream line-by-line: forward each `data: {…}` frame to
+  // onProgress and capture the final `status: "complete"` frame as the result.
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let finalEvent: (EnrollProgressEvent & Partial<VoiceInfo>) | null = null;
+
+  const consume = (rawLine: string): void => {
+    const line = rawLine.trim();
+    if (!line.startsWith("data:")) return; // skip blank lines + SSE comments
+    const payload = line.slice(5).trim();
+    if (!payload) return;
+    let evt: EnrollProgressEvent & Partial<VoiceInfo>;
+    try {
+      evt = JSON.parse(payload);
+    } catch {
+      return; // ignore malformed frames
+    }
+    params.onProgress?.(evt);
+    if (evt.status === "complete") finalEvent = evt;
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let nl: number;
+    while ((nl = buffer.indexOf("\n")) >= 0) {
+      consume(buffer.slice(0, nl));
+      buffer = buffer.slice(nl + 1);
+    }
+  }
+  buffer += decoder.decode();
+  if (buffer) consume(buffer);
+
+  if (!finalEvent) throw new Error("Voice enrollment did not complete");
+  return finalEvent as VoiceInfo;
 }
 
 export async function fetchVoiceAudio(voiceId: string): Promise<Blob> {
