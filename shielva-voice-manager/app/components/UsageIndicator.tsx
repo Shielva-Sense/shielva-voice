@@ -108,7 +108,7 @@ export default function UsageIndicator({ resource }: Props) {
           )}
 
           <a href="/plans" className="usage-ind-link">
-            View plans →
+            Usage & billing →
           </a>
         </div>
       )}

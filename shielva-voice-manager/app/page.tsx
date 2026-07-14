@@ -123,9 +123,9 @@ export default function Home() {
             ))}
           </div>
 
-          {/* Plan badge — links to /plans */}
+          {/* Plan badge — links to the usage & billing page */}
           {isAuthenticated && planLabel && (
-            <a href="/plans" className="vm-plan-badge" title={`${planLabel} plan — View plans`}>
+            <a href="/plans" className="vm-plan-badge" title={`${planLabel} plan — Usage & billing`}>
               <Crown size={12} strokeWidth={2.5} />
               {planLabel}
             </a>

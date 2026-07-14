@@ -1,201 +1,71 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Check, ArrowLeft, Sparkles } from "lucide-react";
+import { useState } from "react";
+import type { CSSProperties } from "react";
+import { ArrowLeft, Plus, Mic, Zap, Loader } from "lucide-react";
+import Link from "next/link";
 import { useAuth } from "../context/AuthContext";
 import { notify } from "../lib/toast";
-import Link from "next/link";
+import {
+  VOICE_TOPUP,
+  deriveVoiceCredits,
+  deriveVoiceAgentStatus,
+  purchaseVoiceTopup,
+  type VoiceAgentStatus,
+} from "../lib/voice-billing";
 import "./plans.css";
 
-// Metering routes are gateway-auth'd DB routes — they need the session cookie,
-// host-scoped to the identity/gateway host, so they must be called there (not
-// via voice.shielva.ai) or the cookie is never sent → 401.
-const GATEWAY_BASE = process.env.NEXT_PUBLIC_IDENTITY_URL || "https://api.shielva.ai";
+/* ─── Voice-agent status presentation ─── */
 
-/* ─── Plan Definitions ─── */
-
-interface PlanDef {
-  key: string;
-  name: string;
-  recommended: boolean;
-  monthlyPrice: number;
-  annualPrice: number;       // total annual price
-  annualMonthly: number;     // monthly equivalent when billed annually
-  description: string;
-  features: string[];
-}
-
-const PLANS: PlanDef[] = [
-  {
-    key: "Essential",
-    name: "Essential",
-    recommended: false,
-    monthlyPrice: 50,
-    annualPrice: 480,
-    annualMonthly: 40,
-    description:
-      "Everything you need to get started with voice intelligence. Ideal for small teams and prototyping.",
-    features: [
-      "30,000 text characters / month",
-      "10,000 voice minutes / month",
-      "All 7 neural services",
-      "Voice cloning & library",
-      "Standard support",
-    ],
-  },
-  {
-    key: "Premium",
-    name: "Premium",
-    recommended: true,
-    monthlyPrice: 280,
-    annualPrice: 2688,
-    annualMonthly: 224,
-    description:
-      "Unlimited processing power for scaling teams. Priority support and deep analytics included.",
-    features: [
-      "Unlimited text processing",
-      "Unlimited voice minutes",
-      "All 7 neural services",
-      "Voice cloning & library",
-      "Priority support",
-      "Advanced analytics",
-    ],
-  },
-  {
-    key: "Ultra",
-    name: "Ultra",
-    recommended: false,
-    monthlyPrice: 833,
-    annualPrice: 9999,
-    annualMonthly: 833,
-    description:
-      "Enterprise-grade voice intelligence with dedicated support, custom model training, and SLA guarantee.",
-    features: [
-      "Unlimited text processing",
-      "Unlimited voice minutes",
-      "All 7 neural services",
-      "Voice cloning & library",
-      "Dedicated account manager",
-      "Custom model training",
-      "SLA guarantee",
-    ],
-  },
-];
-
-/* ─── Usage Info Shape ─── */
-
-interface UsageInfo {
-  plan: string;
-  quotas: { text_chars: number; voice_minutes: number };
-  usage: { text_chars: number; voice_minutes: number };
-}
+const AGENT_STATUS: Record<VoiceAgentStatus, { label: string; tone: string }> = {
+  included: { label: "Included with plan", tone: "ok" },
+  active: { label: "Active", tone: "ok" },
+  depleted: { label: "Out of credits", tone: "warn" },
+  inactive: { label: "Not active", tone: "muted" },
+};
 
 /* ─── Component ─── */
 
-export default function PlansPage() {
-  const { user, isAuthenticated, login } = useAuth();
-  const [billing, setBilling] = useState<"monthly" | "annually">("monthly");
-  const [subscribing, setSubscribing] = useState<string | null>(null);
-  const [usageInfo, setUsageInfo] = useState<UsageInfo | null>(null);
-  const [remotePlans, setRemotePlans] = useState<PlanDef[] | null>(null);
+export default function UsageBillingPage() {
+  const { user, isAuthenticated, isLoading, usageInfo, refreshUsage, login } = useAuth();
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [purchasing, setPurchasing] = useState(false);
 
-  /* Fetch plans from API (fallback to static definitions) */
-  useEffect(() => {
-    const fetchPlans = async () => {
-      try {
-        const res = await fetch(`${GATEWAY_BASE}/amt/v1/metering/plans`, {
-          credentials: "include",
-        });
-        if (res.ok) {
-          const data = await res.json();
-          if (Array.isArray(data) && data.length > 0) {
-            setRemotePlans(data);
-          }
-        }
-      } catch {
-        // Use static plans as fallback
-      }
-    };
-    fetchPlans();
-  }, []);
+  const credits = deriveVoiceCredits(usageInfo);
+  const agentStatus = deriveVoiceAgentStatus(usageInfo);
+  const tenantId = user?.tenants?.[0] ?? "";
 
-  /* Fetch usage info */
-  const refreshUsage = useCallback(async () => {
-    if (!isAuthenticated) return;
-    try {
-      const res = await fetch(`${GATEWAY_BASE}/amt/v1/metering/usage`, {
-        credentials: "include",
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setUsageInfo(data);
-      }
-    } catch {
-      // Silently fail — usage section will just be hidden
-    }
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    refreshUsage();
-  }, [refreshUsage]);
-
-  const plans = remotePlans ?? PLANS;
-  const currentPlan = usageInfo?.plan ?? null;
-
-  /* Subscribe handler */
-  const handleSubscribe = async (planKey: string) => {
-    if (!isAuthenticated) {
-      login();
-      return;
-    }
-    setSubscribing(planKey);
-    try {
-      const res = await fetch(`${GATEWAY_BASE}/amt/v1/metering/subscribe`, {
-        method: "POST",
-        credentials: "include",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ plan: planKey }),
-      });
-      if (res.ok) {
-        notify.success("Subscription updated", `You are now on the ${planKey} plan.`);
-        await refreshUsage();
-      } else {
-        const err = await res.json().catch(() => null);
-        notify.error("Subscription failed", err?.detail || "Please try again later.");
-      }
-    } catch {
-      notify.error("Network error", "Could not reach the subscription service.");
-    } finally {
-      setSubscribing(null);
-    }
-  };
-
-  /* Format number with commas */
   const fmt = (n: number) => n.toLocaleString("en-US");
 
-  /* Price display helpers */
-  const getDisplayPrice = (plan: PlanDef) => {
-    if (billing === "annually") {
-      return plan.annualMonthly;
+  const usedPct =
+    credits && !credits.unlimited && credits.granted > 0
+      ? Math.min(100, (credits.consumed / credits.granted) * 100)
+      : 0;
+
+  const handleTopup = async () => {
+    if (!tenantId) return;
+    setPurchasing(true);
+    try {
+      const result = await purchaseVoiceTopup(tenantId);
+      notify.success(
+        "Extra usage added",
+        `${fmt(VOICE_TOPUP.grantsCredits)} voice credits added — ${fmt(
+          result.voice_credits_remaining
+        )} remaining.`
+      );
+      setConfirmOpen(false);
+      await refreshUsage();
+    } catch (e) {
+      notify.error(
+        "Top-up failed",
+        e instanceof Error ? e.message : "Please try again later."
+      );
+    } finally {
+      setPurchasing(false);
     }
-    return plan.monthlyPrice;
   };
 
-  const getOriginalPrice = (plan: PlanDef) => {
-    if (billing === "annually" && plan.annualMonthly < plan.monthlyPrice) {
-      return plan.monthlyPrice;
-    }
-    return null;
-  };
-
-  /* CTA label */
-  const getCtaLabel = (planKey: string) => {
-    if (!isAuthenticated) return "Subscribe";
-    if (currentPlan === planKey) return "Current Plan";
-    return `Get ${planKey}`;
-  };
-
-  const isCurrent = (planKey: string) => currentPlan === planKey;
+  const status = AGENT_STATUS[agentStatus];
 
   return (
     <div className="plans-page">
@@ -207,189 +77,162 @@ export default function PlansPage() {
 
       {/* Header */}
       <div className="plans-header">
-        <h1 className="plans-title">Shielva Voice Intelligence Plans</h1>
+        <h1 className="plans-title">Usage &amp; Billing</h1>
         <p className="plans-subtitle">
-          Choose the plan that fits your voice processing needs.
+          Track your voice credits and top up when you need more.
         </p>
       </div>
 
-      {/* Toggle */}
-      <div className="plans-toggle-wrapper">
-        <div className="plans-toggle">
-          <button
-            className={`plans-toggle-btn ${billing === "monthly" ? "active" : ""}`}
-            onClick={() => setBilling("monthly")}
-          >
-            Monthly
-          </button>
-          <button
-            className={`plans-toggle-btn ${billing === "annually" ? "active" : ""}`}
-            onClick={() => setBilling("annually")}
-          >
-            Annually
+      {/* Not signed in */}
+      {!isAuthenticated && !isLoading && (
+        <div className="usage-panel usage-signin">
+          <p className="usage-signin-text">
+            Sign in to view your voice usage and manage billing.
+          </p>
+          <button className="usage-topup-btn" onClick={login}>
+            Sign in
           </button>
         </div>
-        {billing === "annually" && (
-          <span className="plans-save-badge">Save up to 20%</span>
-        )}
-      </div>
+      )}
 
-      {/* Plan Cards */}
-      <div className="plans-grid">
-        {plans.map((plan) => (
-          <div
-            key={plan.key}
-            className={[
-              "plan-card",
-              plan.recommended ? "recommended" : "",
-              isCurrent(plan.key) ? "current" : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-          >
-            {/* Name + Badge */}
-            <div className="plan-name-row">
-              <span className="plan-name">{plan.name}</span>
-              {plan.recommended && (
-                <span className="plan-badge">
-                  <Sparkles
-                    size={11}
-                    style={{ display: "inline", verticalAlign: "-1px", marginRight: 3 }}
-                  />
-                  Recommended
-                </span>
-              )}
+      {/* Signed in */}
+      {isAuthenticated && credits && (
+        <div className="usage-wrap">
+          {/* Voice-agent status */}
+          <div className="usage-agent-row">
+            <div className="usage-agent-icon" aria-hidden="true">
+              <Mic size={16} strokeWidth={2} />
             </div>
-
-            {/* Price */}
-            <div className="plan-price">
-              <span className="plan-price-current">${fmt(getDisplayPrice(plan))}</span>
-              {getOriginalPrice(plan) && (
-                <span className="plan-price-original">
-                  ${fmt(getOriginalPrice(plan)!)}
-                </span>
-              )}
-              <span className="plan-price-period">/ month</span>
+            <div className="usage-agent-body">
+              <div className="usage-agent-label">Voice agent</div>
+              <div className="usage-agent-hint">
+                {usageInfo?.plan
+                  ? `${usageInfo.plan} plan`
+                  : "Voice intelligence"}
+              </div>
             </div>
-
-            {/* Billing note */}
-            <div className="plan-billing-note">
-              {billing === "annually"
-                ? `Billed $${fmt(plan.annualPrice)} for 12 months`
-                : "\u00A0"}
-            </div>
-
-            {/* Description */}
-            <p className="plan-description">{plan.description}</p>
-
-            {/* Features */}
-            <ul className="plan-features">
-              {plan.features.map((feat) => (
-                <li key={feat} className="plan-feature">
-                  <Check size={15} className="plan-feature-check" strokeWidth={2.5} />
-                  <span>{feat}</span>
-                </li>
-              ))}
-            </ul>
-
-            {/* CTA */}
-            <button
-              className={`plan-cta ${
-                subscribing === plan.key
-                  ? "plan-cta-loading"
-                  : isCurrent(plan.key)
-                  ? "plan-cta-current"
-                  : "plan-cta-active"
-              }`}
-              disabled={isCurrent(plan.key) || subscribing !== null}
-              onClick={() => handleSubscribe(plan.key)}
-            >
-              {subscribing === plan.key ? "Processing..." : getCtaLabel(plan.key)}
-            </button>
+            <span className={`usage-agent-status usage-agent-status--${status.tone}`}>
+              <span className="usage-agent-dot" />
+              {status.label}
+            </span>
           </div>
-        ))}
-      </div>
 
-      {/* Usage Section */}
-      {isAuthenticated && usageInfo && (
-        <div className="usage-section">
-          <h2 className="usage-title">Current Usage</h2>
-          <p className="usage-subtitle">
-            {usageInfo.plan} plan &mdash; this billing cycle
-          </p>
-          <div className="usage-grid">
-            {/* Text characters */}
-            <div className="usage-card">
-              <div className="usage-card-label">Text Characters</div>
-              <div className="usage-bar">
-                <div
-                  className={`usage-fill ${
-                    usageInfo.quotas.text_chars === -1 ? "usage-fill-unlimited" : ""
-                  }`}
-                  style={
-                    usageInfo.quotas.text_chars === -1
-                      ? undefined
-                      : {
-                          width: `${Math.min(
-                            100,
-                            (usageInfo.usage.text_chars /
-                              usageInfo.quotas.text_chars) *
-                              100
-                          )}%`,
-                        }
-                  }
-                />
+          {/* Credits panel */}
+          <div className="usage-panel">
+            <div className="usage-panel-head">
+              <div>
+                <div className="usage-panel-title">Voice credits</div>
+                <div className="usage-panel-sub">This billing cycle</div>
               </div>
-              <div className="usage-stats">
-                <span>
-                  <span className="usage-stats-value">
-                    {fmt(usageInfo.usage.text_chars)}
-                  </span>{" "}
-                  /{" "}
-                  {usageInfo.quotas.text_chars === -1
-                    ? "Unlimited"
-                    : fmt(usageInfo.quotas.text_chars)}{" "}
-                  used
-                </span>
+              <button
+                className="usage-topup-btn"
+                onClick={() => setConfirmOpen(true)}
+                disabled={!tenantId}
+              >
+                <Plus size={14} strokeWidth={2.5} />
+                Add extra usage
+              </button>
+            </div>
+
+            {credits.unlimited ? (
+              <div className="usage-unlimited">
+                <Zap size={15} strokeWidth={2} className="usage-unlimited-icon" />
+                Voice is included with your plan &mdash; unlimited credits.
+              </div>
+            ) : (
+              <>
+                {/* Remaining headline */}
+                <div className="usage-remaining">
+                  <span className="usage-remaining-value">{fmt(credits.remaining)}</span>
+                  <span className="usage-remaining-label">credits remaining</span>
+                </div>
+
+                {/* Bar */}
+                <div className="usage-bar">
+                  <div
+                    className={`usage-fill ${usedPct > 85 ? "usage-fill-warn" : ""}`}
+                    style={{ width: `${usedPct}%` }}
+                  />
+                </div>
+
+                {/* Granted / Consumed / Remaining */}
+                <div className="usage-stat-grid">
+                  <div className="usage-stat">
+                    <div className="usage-stat-label">Total granted</div>
+                    <div className="usage-stat-value">{fmt(credits.granted)}</div>
+                  </div>
+                  <div className="usage-stat">
+                    <div className="usage-stat-label">Consumed</div>
+                    <div className="usage-stat-value">{fmt(credits.consumed)}</div>
+                  </div>
+                  <div className="usage-stat">
+                    <div className="usage-stat-label">Remaining</div>
+                    <div className="usage-stat-value">{fmt(credits.remaining)}</div>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ─── Top-up confirm modal ─── */}
+      {confirmOpen && (
+        <div
+          style={overlay}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="topup-title"
+          onClick={() => !purchasing && setConfirmOpen(false)}
+        >
+          <div style={panel} onClick={(e) => e.stopPropagation()}>
+            <div style={panelHeader}>
+              <div>
+                <div id="topup-title" style={panelTitle}>
+                  Add extra usage
+                </div>
+                <div style={panelSub}>One-time voice-credit top-up</div>
               </div>
             </div>
 
-            {/* Voice minutes */}
-            <div className="usage-card">
-              <div className="usage-card-label">Voice Minutes</div>
-              <div className="usage-bar">
-                <div
-                  className={`usage-fill ${
-                    usageInfo.quotas.voice_minutes === -1 ? "usage-fill-unlimited" : ""
-                  }`}
-                  style={
-                    usageInfo.quotas.voice_minutes === -1
-                      ? undefined
-                      : {
-                          width: `${Math.min(
-                            100,
-                            (usageInfo.usage.voice_minutes /
-                              usageInfo.quotas.voice_minutes) *
-                              100
-                          )}%`,
-                        }
-                  }
-                />
+            <div style={{ padding: "18px 20px 4px" }}>
+              <div style={offerCard}>
+                <div style={offerCardIcon} aria-hidden="true">
+                  <Zap size={18} strokeWidth={1.8} />
+                </div>
+                <div style={{ textAlign: "left" }}>
+                  <div style={offerAmount}>
+                    +{VOICE_TOPUP.grantsCredits.toLocaleString("en-US")} voice credits
+                  </div>
+                  <div style={offerPrice}>
+                    ${VOICE_TOPUP.priceUsd.toLocaleString("en-US")} one-time
+                  </div>
+                </div>
               </div>
-              <div className="usage-stats">
-                <span>
-                  <span className="usage-stats-value">
-                    {usageInfo.usage.voice_minutes.toLocaleString("en-US", {
-                      maximumFractionDigits: 1,
-                    })}
-                  </span>{" "}
-                  /{" "}
-                  {usageInfo.quotas.voice_minutes === -1
-                    ? "Unlimited"
-                    : fmt(usageInfo.quotas.voice_minutes)}{" "}
-                  used
-                </span>
+              <div style={offerNote}>
+                Credits are added to your balance immediately and never expire while
+                your plan is active.
               </div>
+            </div>
+
+            <div style={footer}>
+              <button
+                style={cancelBtn}
+                onClick={() => setConfirmOpen(false)}
+                disabled={purchasing}
+              >
+                Cancel
+              </button>
+              <button style={confirmBtn(!purchasing)} onClick={handleTopup} disabled={purchasing}>
+                {purchasing ? (
+                  <>
+                    <Loader size={13} style={{ animation: "spin 1s linear infinite" }} />
+                    Processing…
+                  </>
+                ) : (
+                  `Confirm — $${VOICE_TOPUP.priceUsd}`
+                )}
+              </button>
             </div>
           </div>
         </div>
@@ -397,3 +240,128 @@ export default function PlansPage() {
     </div>
   );
 }
+
+/* ─── Modal styles (match StorageConfigModal convention, token-driven) ─── */
+
+const overlay: CSSProperties = {
+  position: "fixed",
+  inset: 0,
+  zIndex: 2000,
+  background: "rgba(0,0,0,0.7)",
+  backdropFilter: "blur(6px)",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  padding: 20,
+};
+
+const panel: CSSProperties = {
+  background: "var(--card)",
+  border: "1px solid var(--border)",
+  borderRadius: 12,
+  width: "100%",
+  maxWidth: 440,
+  display: "flex",
+  flexDirection: "column",
+  boxShadow: "0 24px 64px rgba(0,0,0,0.7)",
+};
+
+const panelHeader: CSSProperties = {
+  display: "flex",
+  alignItems: "flex-start",
+  justifyContent: "space-between",
+  padding: "18px 20px 14px",
+  borderBottom: "1px solid var(--border)",
+};
+
+const panelTitle: CSSProperties = {
+  fontSize: 15,
+  fontWeight: 700,
+  color: "var(--white)",
+  letterSpacing: -0.3,
+};
+
+const panelSub: CSSProperties = {
+  fontSize: 12,
+  color: "var(--gray-400)",
+  marginTop: 3,
+};
+
+const offerCard: CSSProperties = {
+  display: "flex",
+  alignItems: "center",
+  gap: 12,
+  padding: 14,
+  background: "rgba(109,159,55,0.07)",
+  border: "1px solid rgba(109,159,55,0.35)",
+  borderRadius: 10,
+  textAlign: "left",
+};
+
+const offerCardIcon: CSSProperties = {
+  width: 36,
+  height: 36,
+  borderRadius: 8,
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexShrink: 0,
+  background: "rgba(109,159,55,0.15)",
+  color: "var(--bamboo-400)",
+  border: "1px solid rgba(109,159,55,0.25)",
+};
+
+const offerAmount: CSSProperties = {
+  fontSize: 14,
+  fontWeight: 700,
+  color: "var(--white)",
+};
+
+const offerPrice: CSSProperties = {
+  fontSize: 12,
+  color: "var(--gray-400)",
+  marginTop: 2,
+};
+
+const offerNote: CSSProperties = {
+  fontSize: 11,
+  color: "var(--gray-500)",
+  marginTop: 12,
+  lineHeight: 1.5,
+};
+
+const footer: CSSProperties = {
+  display: "flex",
+  justifyContent: "flex-end",
+  gap: 10,
+  padding: "16px 20px",
+  borderTop: "1px solid var(--border)",
+  marginTop: 16,
+};
+
+const cancelBtn: CSSProperties = {
+  height: 34,
+  padding: "0 16px",
+  background: "transparent",
+  border: "1px solid var(--border-hover)",
+  borderRadius: 8,
+  color: "var(--gray-400)",
+  fontSize: 13,
+  cursor: "pointer",
+};
+
+const confirmBtn = (enabled: boolean): CSSProperties => ({
+  height: 34,
+  padding: "0 20px",
+  background: enabled ? "var(--bamboo-500)" : "var(--gray-700)",
+  border: `1px solid ${enabled ? "var(--bamboo-600)" : "var(--gray-600)"}`,
+  borderRadius: 8,
+  color: enabled ? "#fff" : "var(--gray-500)",
+  fontSize: 13,
+  fontWeight: 600,
+  cursor: enabled ? "pointer" : "not-allowed",
+  display: "flex",
+  alignItems: "center",
+  gap: 7,
+  transition: "all 0.15s ease",
+});
