@@ -8,13 +8,15 @@ interface Props {
   onRefresh: () => void;
 }
 
-// Live services after the IndicF5 migration. Removed: speaker-encoder (resemblyzer,
-// :8202) and vocoder (HiFi-GAN, :8204) — IndicF5 clones zero-shot from a reference clip.
+// Live services after the Chatterbox migration. Removed: speaker-encoder (resemblyzer,
+// :8202) and vocoder (HiFi-GAN, :8204) — Chatterbox clones zero-shot from a reference clip.
 const SERVICE_META: Record<string, { port: number; model: string }> = {
   acoustic: { port: 8200, model: "faster-whisper large-v3-turbo (CUDA)" },
   intent: { port: 8201, model: "Intent classifier" },
-  "shielva-tts": { port: 8203, model: "IndicF5 (zero-shot cloning)" },
+  "shielva-tts": { port: 8203, model: "Voice synthesis router" },
   translator: { port: 8205, model: "Qwen 7B (translate + cleanup)" },
+  chatterbox: { port: 8209, model: "30 languages · voice cloning" },
+  orpheus: { port: 8208, model: "streaming · English (~350ms)" },
 };
 
 const SERVICE_COUNT = Object.keys(SERVICE_META).length;

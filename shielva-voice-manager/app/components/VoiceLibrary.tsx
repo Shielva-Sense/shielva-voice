@@ -90,7 +90,7 @@ export default function VoiceLibrary() {
   const handleSetDefault = (voiceId: string) => {
     if (defaultVoiceId === voiceId) {
       setDefaultVoice(null);
-      notify.info("Default cleared", "Text to Speech will use the built-in IndicF5 voice.");
+      notify.info("Default cleared", "Text to Speech will use the built-in Chatterbox voice.");
     } else {
       setDefaultVoice(voiceId);
       const name = voices.find((v) => v.voice_id === voiceId)?.name || voiceId;

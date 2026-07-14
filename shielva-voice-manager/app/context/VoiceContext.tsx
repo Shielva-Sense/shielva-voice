@@ -3,7 +3,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useMemo, ReactNode } from "react";
 
 // ── Default voice ─────────────────────────────────────────────────────────────
-// IndicF5 clones zero-shot from a reference clip, so there is no training state to
+// Chatterbox clones zero-shot from a reference clip, so there is no training state to
 // track. The only cross-component voice state we keep is the user's preferred
 // "default" cloned voice — persisted locally and used to pre-select the TTS /
 // real-time voice pickers.
@@ -11,7 +11,7 @@ import { createContext, useContext, useState, useCallback, useEffect, useMemo, R
 const DEFAULT_VOICE_LS_KEY = "vm_default_voice_id";
 
 interface VoiceContextValue {
-  /** voice_id the user marked as their default, or null for the built-in IndicF5 reference. */
+  /** voice_id the user marked as their default, or null for the built-in Chatterbox reference. */
   defaultVoiceId: string | null;
   setDefaultVoice: (voiceId: string | null) => void;
 }

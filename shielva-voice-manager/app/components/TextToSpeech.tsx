@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
-import { synthesizeSpeech, translate, getLanguages, recordUsage, engineForLang, SUPPORTED_TTS_LANGS, type TranslateEngine } from "../lib/amt-api";
+import { synthesizeSpeech, translate, getLanguages, recordUsage, CHATTERBOX_TTS_LANGS, ORPHEUS_TTS_LANGS, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
@@ -150,8 +150,14 @@ const PUBLIC_MAX_CHARS = Number(process.env.NEXT_PUBLIC_PUBLIC_MAX_TEXT_CHARS ||
 const PUBLIC_MAX_WORDS = 10;  // unauthenticated users only
 
 const TTS_STAGES = [
-  { label: "Synthesizing with IndicF5...", percent: 55 },
+  { label: "Synthesizing with Chatterbox...", percent: 55 },
   { label: "Finalizing audio...", percent: 90 },
+];
+
+// Selectable TTS engines shown in the Voice engine picker.
+const ENGINE_OPTIONS: { id: TtsEngine; name: string; hint: string }[] = [
+  { id: "chatterbox", name: "Chatterbox", hint: "Voice cloning · 30 languages" },
+  { id: "orpheus", name: "Orpheus", hint: "Fast English streaming" },
 ];
 
 const TRANSLATE_STAGE = { label: "Translating text...", percent: 8 };
@@ -162,7 +168,7 @@ export default function TextToSpeech() {
   const { canUseFeature, openModal: openStorageModal } = useStorage();
   const storageAccess = canUseFeature("tts");
   const [text, setText] = useState("");
-  // "" = default IndicF5 reference voice; otherwise a cloned voice from the Voice Library.
+  // "" = default Chatterbox reference voice; otherwise a cloned voice from the Voice Library.
   const [voiceId, setVoiceId] = useState("");
   const [generating, setGenerating] = useState(false);
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
@@ -172,10 +178,13 @@ export default function TextToSpeech() {
   const [inputLang, setInputLang] = useState("en");
   const [outputLang, setOutputLang] = useState("en");
   const [engine, setEngine] = useState<TranslateEngine>("qwen");
-  // TTS model is DERIVED from the output language — F5 for English/Chinese,
-  // IndicF5 for Indian languages. No manual toggle: you can't pick an engine for
-  // a language it can't speak.
-  const ttsEngine = engineForLang(outputLang);
+  // TTS engine follows the OUTPUT LANGUAGE:
+  //   • English → Orpheus (fast streaming, DEFAULT) OR Chatterbox — user picks.
+  //   • any other language (Indian + international) → Chatterbox only (Orpheus is English-only).
+  // Voice cloning is a Chatterbox capability; Orpheus uses a fixed preset voice (no voice pick).
+  const [ttsEngine, setTtsEngine] = useState<TtsEngine>("orpheus");
+  const orpheusAvailable = ORPHEUS_TTS_LANGS.includes(outputLang);   // i.e. English
+  const canSelectVoice = ttsEngine === "chatterbox";                 // clone only on Chatterbox
   const [availableLangs, setAvailableLangs] = useState<string[]>(Object.keys(LANGUAGES));
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -203,7 +212,7 @@ export default function TextToSpeech() {
     // Elapsed clock — ticks every second
     elapsedTimerRef.current = setInterval(() => setElapsed((s) => s + 1), 1000);
     // Fake progress — advances from 15% toward 90% using eased increments so the
-    // user sees continuous movement during IndicF5 inference.
+    // user sees continuous movement during Chatterbox inference.
     let fakePct = 15;
     fakeProgressRef.current = setInterval(() => {
       // Logarithmic slow-down: fast at start, slows as it approaches 90%
@@ -241,14 +250,21 @@ export default function TextToSpeech() {
 
   // Human-readable label for the currently selected voice.
   const selectedVoiceName =
-    voices.find((v) => v.voice_id === voiceId)?.name || "Default IndicF5 voice";
+    voices.find((v) => v.voice_id === voiceId)?.name || "Default Chatterbox voice";
+
+  // The output language drives the engine, not the other way around. English is the only
+  // language Orpheus speaks, so English defaults to Orpheus (Chatterbox stays selectable);
+  // every other language is Chatterbox-only, so we snap the engine to Chatterbox.
+  useEffect(() => {
+    setTtsEngine(orpheusAvailable ? "orpheus" : "chatterbox");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [outputLang]);
 
   // ── Computed option arrays for LanguageSelect ────────────────────────────
-  // Only offer languages a TTS engine can actually speak (English/Chinese via F5,
-  // the 11 Indian languages via IndicF5). Everything else is hidden — the engine
-  // is then chosen automatically from whichever supported language is picked.
+  // The language menu always offers the full Chatterbox range (30) — the engine follows the
+  // chosen language rather than the language following the engine.
   const engineLangOptions: LangOption[] = availableLangs
-    .filter((l) => LANGUAGES[l] && SUPPORTED_TTS_LANGS.includes(l))
+    .filter((l) => LANGUAGES[l] && CHATTERBOX_TTS_LANGS.includes(l))
     .map((l) => ({
       value: l,
       label: LANGUAGES[l].name,
@@ -273,7 +289,7 @@ export default function TextToSpeech() {
 
     try {
       // ── Translate input → output language (Qwen) before synthesis ──────
-      // IndicF5 renders whatever script it is handed, so we translate first
+      // Chatterbox renders whatever script it is handed, so we translate first
       // and then synthesize the target-language text directly.
       let speakText = text;
       if (needsTranslation) {
@@ -298,13 +314,22 @@ export default function TextToSpeech() {
         }
       }
 
-      // ── Synthesize with IndicF5 (zero-shot; default reference or a cloned voice) ──
-      setStep("Synthesizing with IndicF5...");
-      proc.addLog(voiceId ? `Cloning "${selectedVoiceName}"...` : "Using default IndicF5 reference voice...");
+      // ── Synthesize. Chatterbox clones zero-shot (default reference or a Library voice);
+      //    Orpheus is a fixed-voice fast English engine, so it never carries a voiceId. ──
+      const cloning = canSelectVoice && Boolean(voiceId);
+      setStep(ttsEngine === "orpheus" ? "Streaming with Orpheus..." : "Synthesizing with Chatterbox...");
+      proc.addLog(
+        ttsEngine === "orpheus"
+          ? "Streaming English with Orpheus (fast preset voice)..."
+          : cloning
+            ? `Cloning "${selectedVoiceName}"...`
+            : "Using default Chatterbox reference voice...",
+      );
       const { blob: wavBlob, audioUrl } = await synthesizeSpeech({
         text: speakText,
         engine: ttsEngine,
-        ...(voiceId ? { voiceId } : {}),
+        lang: outputLang,
+        ...(cloning ? { voiceId } : {}),
       });
 
       proc.nextStage("Audio ready");
@@ -350,7 +375,7 @@ export default function TextToSpeech() {
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.toLowerCase().includes("fetch") || msg.toLowerCase().includes("synth")) {
-          notify.serviceOffline("IndicF5 TTS");
+          notify.serviceOffline("Chatterbox TTS");
         } else {
           notify.error("Text-to-speech failed", msg);
         }
@@ -379,26 +404,41 @@ export default function TextToSpeech() {
         </div>
         <div>
           <div className="vm-card-title">Text to Speech</div>
-          <div className="vm-card-subtitle">Voice synthesis · IndicF5</div>
+          <div className="vm-card-subtitle">Voice synthesis · Chatterbox</div>
         </div>
         <UsageIndicator resource="both" />
       </div>
 
       {/* Language selectors — Input + Output */}
-      {/* TTS model — auto-selected from the output language (read-only) */}
+      {/* TTS engine — user-selectable: Chatterbox (clone + 30 languages) or Orpheus (fast English) */}
       <div style={{ marginBottom: 8 }}>
-        <div className="vm-label" style={{ marginBottom: 4 }}>Voice model</div>
-        <div style={{
-          display: "inline-flex", alignItems: "center", gap: 8, padding: "6px 10px",
-          borderRadius: 8, border: "1px solid var(--border-subtle)",
-          background: "var(--surface-subtle)", fontSize: 12,
-        }}>
-          <span style={{ fontWeight: 600, color: "var(--text-primary)" }}>
-            {ttsEngine === "indicf5" ? "IndicF5" : "F5-TTS"}
-          </span>
-          <span style={{ color: "var(--text-muted)" }}>
-            {ttsEngine === "indicf5" ? "Indian languages" : "English / Chinese"} — auto-selected from output language
-          </span>
+        <div className="vm-label" style={{ marginBottom: 4 }}>Voice engine</div>
+        <div role="group" aria-label="TTS engine" style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+          {/* Orpheus only speaks English — for every other language Chatterbox is the sole engine. */}
+          {ENGINE_OPTIONS.filter((e) => e.id === "chatterbox" || orpheusAvailable).map((e) => {
+            const active = ttsEngine === e.id;
+            return (
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => setTtsEngine(e.id)}
+                aria-pressed={active}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
+                  padding: "6px 12px", borderRadius: 8, cursor: "pointer", textAlign: "left",
+                  border: `1px solid ${active ? "var(--brand-500, #6d9f37)" : "var(--border-subtle)"}`,
+                  background: active ? "var(--brand-50, rgba(109,159,55,0.10))" : "var(--surface-subtle)",
+                  fontSize: 12,
+                }}
+              >
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, color: "var(--text-primary)" }}>
+                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: active ? "var(--brand-500, #6d9f37)" : "var(--border-strong, #ccc)" }} />
+                  {e.name}
+                </span>
+                <span style={{ color: "var(--text-muted)" }}>{e.hint}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -591,34 +631,37 @@ export default function TextToSpeech() {
         )}
       </div>
 
-      {/* Voice selector — default IndicF5 reference or a cloned voice from the Library */}
-      <div style={{ marginTop: 12 }}>
-        <div className="vm-label" style={{ marginBottom: 4 }}>Voice</div>
-        <select
-          className="vm-select"
-          value={voiceId}
-          onChange={(e) => setVoiceId(e.target.value)}
-          disabled={generating}
-        >
-          <option value="">Default IndicF5 voice</option>
-          {/* Cloned voices are account-scoped — only offered to signed-in users. */}
-          {isAuthenticated && voices.map((v) => (
-            <option key={v.voice_id} value={v.voice_id}>
-              {v.name || v.voice_id}
-              {v.language ? ` · ${LANGUAGES[v.language]?.flag ?? ""} ${LANGUAGES[v.language]?.name ?? v.language}` : ""}
-            </option>
-          ))}
-        </select>
-        <div style={{ fontSize: 10, color: "var(--bamboo-500)", marginTop: 4, paddingLeft: 4 }}>
-          {!isAuthenticated
-            ? "Sign in to clone and use your own voice."
-            : voiceId
-              ? "Zero-shot clone of your Voice Library reference — no training needed."
-              : voices.length === 0
-                ? "Add a reference in the Voice Library to clone your own voice."
-                : "Using the built-in IndicF5 reference. Pick a Library voice to clone your own."}
+      {/* Voice selector — Chatterbox only. Orpheus is a fixed-voice fast English engine and
+          cannot clone, so the picker is hidden whenever Orpheus is the active engine. */}
+      {canSelectVoice && (
+        <div style={{ marginTop: 12 }}>
+          <div className="vm-label" style={{ marginBottom: 4 }}>Voice</div>
+          <select
+            className="vm-select"
+            value={voiceId}
+            onChange={(e) => setVoiceId(e.target.value)}
+            disabled={generating}
+          >
+            <option value="">Default Chatterbox voice</option>
+            {/* Cloned voices are account-scoped — only offered to signed-in users. */}
+            {isAuthenticated && voices.map((v) => (
+              <option key={v.voice_id} value={v.voice_id}>
+                {v.name || v.voice_id}
+                {v.language ? ` · ${LANGUAGES[v.language]?.flag ?? ""} ${LANGUAGES[v.language]?.name ?? v.language}` : ""}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: 10, color: "var(--bamboo-500)", marginTop: 4, paddingLeft: 4 }}>
+            {!isAuthenticated
+              ? "Sign in to clone and use your own voice."
+              : voiceId
+                ? "Zero-shot clone of your Voice Library reference — no training needed."
+                : voices.length === 0
+                  ? "Add a reference in the Voice Library to clone your own voice."
+                  : "Using the built-in Chatterbox reference. Pick a Library voice to clone your own."}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Generate Button */}
       <button
@@ -636,7 +679,7 @@ export default function TextToSpeech() {
             <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11, opacity: 0.65, letterSpacing: "0.02em" }}>
               <span>{elapsed}s elapsed</span>
               <span>·</span>
-              <span>IndicF5 — ~2–15s (cached instant)</span>
+              <span>Chatterbox — ~2–15s (cached instant)</span>
             </div>
           </div>
         ) : (
@@ -656,7 +699,7 @@ export default function TextToSpeech() {
 
       {/* Info */}
       <div className="vm-info">
-        <strong>IndicF5</strong> zero-shot cloning — English + Indian languages (~2–15s;
+        <strong>Chatterbox</strong> zero-shot cloning — 23 global + 8 Indian languages (~2–15s;
         cached responses are instant). Pick a voice from your Voice Library, or use the
         built-in default reference.
       </div>

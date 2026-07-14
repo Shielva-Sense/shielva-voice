@@ -6,7 +6,7 @@ import { useAuth } from "../context/AuthContext";
 /**
  * Anonymous-user stand-in for the Voice Library + Clone-a-voice cards.
  * A cloned voice is tied to an account, so enrollment and the library are
- * hidden until the user signs in. The default IndicF5 voice still works
+ * hidden until the user signs in. The default Chatterbox voice still works
  * pre-login via the Text to Speech card.
  */
 export default function VoiceCloneLockedCard() {

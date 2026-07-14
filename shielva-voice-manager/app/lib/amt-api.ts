@@ -80,8 +80,8 @@ export interface ServiceHealth {
   detail?: string;
 }
 
-// Live backend services after the IndicF5 migration.
-// Removed: speaker-encoder (resemblyzer) and vocoder (HiFi-GAN) — IndicF5 clones
+// Live backend services after the Chatterbox migration.
+// Removed: speaker-encoder (resemblyzer) and vocoder (HiFi-GAN) — Chatterbox clones
 // zero-shot from a reference clip, so neither a speaker embedding nor a separate
 // vocoder exists anymore.
 export const SERVICES = [
@@ -89,6 +89,8 @@ export const SERVICES = [
   { key: "intent", label: "Intent" },
   { key: "shielva-tts", label: "Text-to-Speech" },
   { key: "translator", label: "Translation" },
+  { key: "chatterbox", label: "Chatterbox + Indic LoRA" },
+  { key: "orpheus", label: "Orpheus (streaming)" },
 ] as const;
 
 interface AmtHealthResponse {
@@ -184,9 +186,9 @@ export async function classifyIntent(text: string): Promise<IntentResult> {
   return res.json();
 }
 
-// ─── Voices (IndicF5 zero-shot reference clips) ───────────────────────────────
+// ─── Voices (Chatterbox zero-shot reference clips) ───────────────────────────────
 //
-// A "voice" is a stored reference clip that IndicF5 clones zero-shot. There is
+// A "voice" is a stored reference clip that Chatterbox clones zero-shot. There is
 // no training, no speaker embedding, and no trained/untrained status — every
 // enrolled voice is immediately usable for synthesis.
 
@@ -251,7 +253,7 @@ export interface EnrollVoiceParams {
   name: string;
   /** ISO language code of the reference clip. Defaults to "en". */
   language?: string;
-  /** Transcript of the clip — optional, speeds up IndicF5 synthesis. */
+  /** Transcript of the clip — optional, speeds up Chatterbox synthesis. */
   refText?: string;
   /** One or more reference clips (WAV). At least one is required. */
   clips: Blob[];
@@ -260,7 +262,7 @@ export interface EnrollVoiceParams {
 }
 
 /**
- * Enroll a voice for IndicF5 zero-shot cloning via a single multipart POST.
+ * Enroll a voice for Chatterbox zero-shot cloning via a single multipart POST.
  *
  * The endpoint responds with a Server-Sent Events stream (`text/event-stream`):
  * each `data: {…}` line is a JSON progress frame, ending with a final frame
@@ -439,44 +441,22 @@ export async function getOptimizeStatus(voiceId: string): Promise<{ optimized: b
 export interface RealtimeConfig {
   srcLang: string;
   tgtLang: string;
-  /** Cloned/registered voice for IndicF5. Omit for the default reference. */
+  /** Cloned/registered voice for Chatterbox. Omit for the default reference. */
   voiceId?: string;
   voiceName?: string;
   tenantName?: string;
   sampleRate?: number;
-  whisperModel?: string;  // faster-whisper size, e.g. "large-v3-turbo"
   /** Translation engine — "qwen" (commercial-safe, default) or "nllb" (faster). */
   engine?: TranslateEngine;
+  /** TTS engine for the spoken output — "chatterbox" (clones, all languages) or
+   *  "orpheus" (fast English streaming). Empty → server default (chatterbox). */
+  ttsEngine?: TtsEngine;
 }
 
-export interface AcousticModels {
-  default: string;
-  loaded: string[];
-  available: string[];
-  allow_download: boolean;  // false in production — models must be pre-provisioned on volume
-  model_root: string;       // where models are stored (SSD path in dev, volume path in prod)
-}
-
-export async function getAcousticModels(): Promise<AcousticModels> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/acoustic/models`, {
-    headers: amtHeaders(),
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  return res.json();
-}
-
-/** Trigger background pre-load of a Whisper model size on the acoustic service.
- *  Returns "loading" (started) | "already_loaded" (ready immediately) | throws on error.
- */
-export async function preloadAcousticModel(modelSize: string): Promise<"loading" | "already_loaded"> {
-  const res = await fetch(`${AMT_BASE}/amt/v1/acoustic/models/load`, {
-    method: "POST",
-    headers: { ...amtHeaders(), "X-Whisper-Model": modelSize },
-  });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
-  const data = await res.json();
-  return data.status as "loading" | "already_loaded";
-}
+// NOTE: the realtime pipeline transcribes in-process on the TTS router with a fixed
+// faster-whisper model (ASR_WHISPER_MODEL_SIZE, default large-v3-turbo) — it is not
+// switchable per session, so the acoustic-model list/preload endpoints on :8200 are
+// intentionally not consumed here.
 
 export interface RealtimeEvent {
   type: "ready" | "audio" | "transcript" | "translation" | "error" | "ping";
@@ -513,8 +493,8 @@ export function openRealtimeSession(
       voice_id: config.voiceId || "",
       voice_name: config.voiceName || "",
       sample_rate: config.sampleRate || 16000,
-      whisper_model: config.whisperModel || null,
       translate_engine: config.engine || "qwen",
+      tts_engine: config.ttsEngine || "chatterbox",
     }));
   };
 
@@ -545,29 +525,36 @@ export function openRealtimeSession(
   };
 }
 
-// ─── Text-to-Speech (IndicF5) ─────────────────────────────────────────────────
+// ─── Text-to-Speech (Chatterbox + Orpheus) ────────────────────────────────────
 //
-// The backend is IndicF5-only (AI4Bharat): zero-shot voice cloning from a ~10s
-// reference clip, handling English and Indian languages. There is no engine
-// selection, no gender, no accent, no phoneme/vocoder pipeline — a single POST
-// returns a finished WAV clip.
+// Two engines (F5-base and IndicF5 both retired):
+//   chatterbox — Chatterbox Multilingual + Indic LoRA. Zero-shot voice cloning from a short
+//                reference clip + 23 global languages + 8 Indian languages (Hindi, Telugu,
+//                Kannada, Bengali, Tamil, Malayalam, Marathi, Gujarati). The DEFAULT for
+//                everything. No reference transcript needed.
+//   orpheus    — real-time token-streaming TTS (~350 ms first audio, preset English voice),
+//                opted into for lowest-latency English (live translation / voice bot).
+// A single POST returns a finished WAV clip; /stream yields it chunk-by-chunk.
 
-/** TTS engine: F5-TTS base (English/Chinese) or AI4Bharat IndicF5 (Indian languages). */
-export type TtsEngine = "f5" | "indicf5";
+/** TTS engine: Chatterbox (clone + 23 global + 8 Indian langs, default) or Orpheus (fast English). */
+export type TtsEngine = "chatterbox" | "orpheus";
 
-// Languages each TTS engine can actually render. F5-TTS base was trained on
-// English + Chinese only; IndicF5 covers the 11 Indian languages. Any other
-// language (Italian, Spanish, …) is unsupported today — offering it would just
-// produce garbage, so the UI hides it rather than pretending.
-export const F5_TTS_LANGS: readonly string[] = ["en", "zh"];
-export const INDICF5_TTS_LANGS: readonly string[] = [
-  "hi", "ta", "te", "kn", "ml", "mr", "bn", "gu", "pa", "or", "as", "ur", "sa",
+// Chatterbox: 23 base multilingual languages + 8 Indian (via Indic LoRA).
+// Not supported (dropped): Punjabi, Odia, Assamese, Urdu, Sanskrit.
+export const CHATTERBOX_TTS_LANGS: readonly string[] = [
+  // base multilingual (23)
+  "en", "hi", "ar", "da", "de", "el", "es", "fi", "fr", "he", "it", "ja",
+  "ko", "ms", "nl", "no", "pl", "pt", "ru", "sv", "sw", "tr", "zh",
+  // Indian via LoRA (hi already above)
+  "te", "kn", "bn", "ta", "ml", "mr", "gu",
 ];
-export const SUPPORTED_TTS_LANGS: readonly string[] = [...F5_TTS_LANGS, ...INDICF5_TTS_LANGS];
+export const ORPHEUS_TTS_LANGS: readonly string[] = ["en"];
+export const SUPPORTED_TTS_LANGS: readonly string[] = CHATTERBOX_TTS_LANGS;
 
-/** Pick the engine for an output language: Indian scripts → IndicF5, else F5. */
-export function engineForLang(lang: string): TtsEngine {
-  return INDICF5_TTS_LANGS.includes(lang) ? "indicf5" : "f5";
+/** Engine for an output language. Chatterbox is universal (clones + every supported language);
+ *  Orpheus is opted into explicitly when low-latency English streaming is wanted. */
+export function engineForLang(_lang: string): TtsEngine {
+  return "chatterbox";
 }
 
 export interface SynthesizeParams {
@@ -577,14 +564,17 @@ export interface SynthesizeParams {
   voiceId?: string;
   /** Inline base64 reference clip (used instead of a stored voice_id). */
   voiceAudioB64?: string;
-  /** Transcript of the inline reference clip — improves zero-shot cloning fidelity. */
+  /** Transcript of the inline reference clip — accepted for compatibility (Chatterbox
+   *  clones directly from the audio and does not need it). */
   refText?: string;
-  /** Synthesis engine — routes to the matching model. Defaults to "f5". */
+  /** Synthesis engine — routes to the matching sidecar. Defaults to "chatterbox". */
   engine?: TtsEngine;
+  /** Output language (ISO code). Chatterbox speaks it; unknown codes fall back to English. */
+  lang?: string;
 }
 
 /**
- * Synthesize speech with IndicF5. Returns a finished WAV blob.
+ * Synthesize speech with Chatterbox. Returns a finished WAV blob.
  *
  * The server computes the full clip in memory before responding (Content-Length
  * set), so the resulting blob/data URL supports seek + range in the browser.
@@ -597,10 +587,11 @@ export interface SynthesizeResult {
 }
 
 export async function synthesizeSpeech(params: SynthesizeParams): Promise<SynthesizeResult> {
-  const body: Record<string, unknown> = { text: params.text, engine: params.engine ?? "f5" };
+  const body: Record<string, unknown> = { text: params.text, engine: params.engine ?? "chatterbox" };
   if (params.voiceId) body.voice_id = params.voiceId;
   if (params.voiceAudioB64) body.voice_audio_b64 = params.voiceAudioB64;
   if (params.refText) body.ref_text = params.refText;
+  if (params.lang) body.lang = params.lang;
 
   const res = await fetch(`${AMT_BASE}/amt/v1/synthesize`, {
     method: "POST",

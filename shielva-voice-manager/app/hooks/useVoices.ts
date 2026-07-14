@@ -7,7 +7,7 @@ import { useAuth } from "../context/AuthContext";
 export const VOICES_KEY = ["voices"] as const;
 
 /**
- * List enrolled IndicF5 reference voices.
+ * List enrolled Chatterbox reference voices.
  *
  * `listVoices()` throws on a failed request (incl. the 404 the list endpoint
  * returns until the registry is wired). React Query keeps the last successful

@@ -106,6 +106,14 @@ function formatNumber(n: number): string {
   return String(n);
 }
 
+/** Human label for a raw feature key ("live_translation" → "Live Translation"). Prefers the
+ *  curated FEATURE_OPTIONS label; falls back to title-casing the underscored key. */
+function featureLabel(feature: string): string {
+  const opt = FEATURE_OPTIONS.find((o) => o.value === feature);
+  if (opt) return opt.label;
+  return feature.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 // ─── Styles ──────────────────────────────────────────────────────────────────
 
 const glassCard: React.CSSProperties = {
@@ -1739,11 +1747,16 @@ export default function AnalyticsWidget() {
               .sort(([, a], [, b]) => b - a)
               .map(([feature, count]) => (
                 <div key={feature} style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                  <span style={{ fontSize: "12px", color: "var(--gray-300)", width: "72px", textTransform: "capitalize" }}>{feature}</span>
+                  <span
+                    title={featureLabel(feature)}
+                    style={{ fontSize: "12px", color: "var(--gray-300)", width: "116px", flexShrink: 0, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}
+                  >
+                    {featureLabel(feature)}
+                  </span>
                   <div style={{ flex: 1, height: "6px", background: "var(--surface-subtle)", borderRadius: "3px", overflow: "hidden" }}>
                     <div style={{ width: `${(count / maxFeatureCount) * 100}%`, height: "100%", background: FEATURE_COLORS[feature] || "var(--bamboo-400)", borderRadius: "3px", transition: "width 0.3s" }} />
                   </div>
-                  <span style={{ fontSize: "11px", color: "var(--gray-500)", width: "32px", textAlign: "right" }}>{count}</span>
+                  <span style={{ fontSize: "11px", color: "var(--gray-500)", width: "32px", textAlign: "right", flexShrink: 0 }}>{count}</span>
                 </div>
               ))}
           </div>

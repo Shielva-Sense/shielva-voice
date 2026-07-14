@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
-import { Radio, Mic, Square, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge } from "lucide-react";
-import { openRealtimeSession, getAcousticModels, preloadAcousticModel, saveLiveTranslationClip, getLiveTranslationClips, engineForLang, SUPPORTED_TTS_LANGS, type RealtimeEvent, type TranslateEngine } from "../lib/amt-api";
-import { saveClipIDB, loadAllClipsIDB, updateClipCloud, bufferToUrl, type StoredClip } from "../lib/live-translation-store";
+import { Radio, Mic, Square, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge, Trash2 } from "lucide-react";
+import { openRealtimeSession, saveLiveTranslationClip, getLiveTranslationClips, deleteHistoryItem, CHATTERBOX_TTS_LANGS, ORPHEUS_TTS_LANGS, type RealtimeEvent, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
+import { saveClipIDB, loadAllClipsIDB, updateClipCloud, deleteClipIDB, bufferToUrl, type StoredClip } from "../lib/live-translation-store";
 import { useAuth } from "../context/AuthContext";
 import { useVoice } from "../context/VoiceContext";
 import { useVoices } from "../hooks/useVoices";
@@ -13,7 +13,7 @@ import LanguageSelect, { type LangOption } from "./LanguageSelect";
 import EngineToggle from "./EngineToggle";
 
 // ─── Language map ─────────────────────────────────────────────────────────────
-// IndicF5 renders both Indian and international scripts zero-shot; the grouping
+// Chatterbox renders both Indian and international scripts zero-shot; the grouping
 // below is purely for the language picker's ordering.
 const LANGUAGES: Record<string, { name: string; flag: string; group: "indian" | "international" }> = {
   // Indian
@@ -50,6 +50,18 @@ const SAMPLE_RATE    = 16000;   // 16 kHz mono — Silero VAD requirement
 const CHUNK_SAMPLES  = 1024;    // 64 ms @ 16 kHz — good balance of latency vs network overhead
 const WORKLET_PATH   = "/worklets/audio-capture-processor.js";
 
+// Selectable TTS (voice) engines — mirrors the Text-to-Speech card. Orpheus is English-only
+// and cannot clone; Chatterbox clones a chosen voice and speaks all 30 languages.
+const TTS_ENGINE_OPTIONS: { id: TtsEngine; name: string; hint: string }[] = [
+  { id: "chatterbox", name: "Chatterbox", hint: "Voice cloning · 30 languages" },
+  { id: "orpheus", name: "Orpheus", hint: "Fast English streaming" },
+];
+
+// The realtime pipeline transcribes in-process with a fixed faster-whisper model
+// (ASR_WHISPER_MODEL_SIZE on the TTS router, default large-v3-turbo). It is not
+// switchable per session, so the card shows it read-only instead of a picker.
+const REALTIME_STT_MODEL = "Whisper Large-v3-turbo · CUDA";
+
 interface AudioMessage {
   id: string;
   wavUrl: string;
@@ -59,6 +71,7 @@ interface AudioMessage {
   langPair?: string;
   srcLang?: string;
   tgtLang?: string;
+  cloudId?: string;   // MongoDB _id — needed to delete the cloud copy
 }
 
 function langLabel(pair: string, langs: typeof LANGUAGES): string {
@@ -217,16 +230,19 @@ function WaveformRange({
 
 // ── Collection folder modal ────────────────────────────────────────────────────
 function CollectionModal({
-  langPair, clips, onClose,
+  langPair, clips, onClose, onDeleteClip, onDeleteCollection,
 }: {
   langPair: string;
   clips: AudioMessage[];
   onClose: () => void;
+  onDeleteClip: (id: string) => void;
+  onDeleteCollection: () => void;
 }) {
   const audioRef  = useRef<HTMLAudioElement | null>(null);
   const [activeId, setActiveId]     = useState<string | null>(null);
   const [isPlaying, setIsPlaying]   = useState(false);
   const [merging, setMerging]       = useState(false);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);   // two-step confirm for delete-all
   const [order, setOrder]           = useState<string[]>(() => clips.map(c => c.id));
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set(clips.map(c => c.id)));
   const [ranges, setRanges]         = useState<Record<string, { start: number; end: number }>>({});
@@ -326,6 +342,18 @@ function CollectionModal({
             {langLabel(langPair, LANGUAGES)}
           </span>
           <span style={{ fontSize: 11, color: "var(--gray-500)" }}>{clips.length} clip{clips.length !== 1 ? "s" : ""}</span>
+          {/* Delete whole collection — two-step confirm (destructive: removes all clips + cloud copies). */}
+          {confirmDeleteAll ? (
+            <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+              <span style={{ fontSize: 11, color: "#f87171" }}>Delete all {clips.length}?</span>
+              <button onClick={() => setConfirmDeleteAll(false)} style={{ background: "var(--surface-subtle)", border: "1px solid var(--border-subtle)", borderRadius: 5, color: "var(--text-muted)", padding: "3px 9px", cursor: "pointer", fontSize: 11 }}>Cancel</button>
+              <button onClick={() => { onDeleteCollection(); onClose(); }} style={{ background: "rgba(239,68,68,0.14)", border: "1px solid rgba(239,68,68,0.5)", borderRadius: 5, color: "#f87171", padding: "3px 9px", cursor: "pointer", fontSize: 11, fontWeight: 600 }}>Delete</button>
+            </div>
+          ) : (
+            <button onClick={() => setConfirmDeleteAll(true)} title="Delete this collection" style={{ background: "transparent", border: "1px solid var(--border-subtle)", borderRadius: 5, color: "#f87171", padding: "3px 8px", cursor: "pointer", display: "flex", alignItems: "center", gap: 4, fontSize: 11 }}>
+              <Trash2 size={12} /> Delete all
+            </button>
+          )}
           <button onClick={onClose} style={{ background: "transparent", border: "none", color: "var(--gray-400)", cursor: "pointer", padding: 4, marginLeft: 8, display: "flex" }}>
             <X size={16} />
           </button>
@@ -415,6 +443,15 @@ function CollectionModal({
                     >
                       <Download size={11} />
                     </button>
+                    {/* Delete single */}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); onDeleteClip(msg.id); }}
+                      title="Delete this clip"
+                      aria-label="Delete this clip"
+                      style={{ background: "transparent", border: "1px solid var(--border-subtle)", borderRadius: 5, color: "#f87171", padding: "4px 7px", cursor: "pointer", display: "flex", alignItems: "center", flexShrink: 0 }}
+                    >
+                      <Trash2 size={11} />
+                    </button>
                   </div>
 
                   {/* Waveform range — only when selected */}
@@ -473,7 +510,7 @@ function CollectionModal({
 }
 
 // ── Simple audio clip player (replaces SoapBubblePlayer) ─────────────────────
-function RealtimeClip({ msg, tgtLang, flag }: { msg: AudioMessage; tgtLang: string; flag: string }) {
+function RealtimeClip({ msg, tgtLang, flag, autoPlay, onDelete }: { msg: AudioMessage; tgtLang: string; flag: string; autoPlay?: boolean; onDelete?: () => void }) {
   const [playing, setPlaying] = useState(false);
   const [progress, setProgress] = useState(0);
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -504,6 +541,7 @@ function RealtimeClip({ msg, tgtLang, flag }: { msg: AudioMessage; tgtLang: stri
       <audio
         ref={audioRef}
         src={msg.wavUrl}
+        autoPlay={autoPlay}
         onPlay={() => setPlaying(true)}
         onPause={() => setPlaying(false)}
         onEnded={() => { setPlaying(false); setProgress(0); }}
@@ -538,6 +576,20 @@ function RealtimeClip({ msg, tgtLang, flag }: { msg: AudioMessage; tgtLang: stri
         >
           <Download size={11} />
         </button>
+        {onDelete && (
+          <button
+            onClick={onDelete}
+            title="Delete clip"
+            aria-label="Delete clip"
+            style={{
+              background: "transparent", border: "1px solid var(--border-subtle)",
+              borderRadius: 4, color: "#f87171", padding: "3px 6px",
+              cursor: "pointer", display: "flex", alignItems: "center",
+            }}
+          >
+            <Trash2 size={11} />
+          </button>
+        )}
       </div>
       {/* Progress bar */}
       <div style={{ height: 3, background: "var(--border-subtle)", borderRadius: 2 }}>
@@ -561,7 +613,12 @@ export default function RealTimeVoice() {
   const [voiceId, setVoiceId]     = useState("");
   const [srcLang, setSrcLang]     = useState("en");
   const [tgtLang, setTgtLang]     = useState("hi");
-  const [engine, setEngine]       = useState<TranslateEngine>("qwen");
+  const [engine, setEngine]       = useState<TranslateEngine>("qwen");   // translation engine
+  // TTS (voice) engine follows the OUTPUT language: English → Orpheus (fast) is available and
+  // default; every other language is Chatterbox-only. Voice cloning is a Chatterbox capability.
+  const [ttsEngine, setTtsEngine] = useState<TtsEngine>("chatterbox");
+  const orpheusAvailable = ORPHEUS_TTS_LANGS.includes(tgtLang);   // English only
+  const canSelectVoice   = ttsEngine === "chatterbox";            // clone only on Chatterbox
   const [active, setActive]       = useState(false);
   const [status, setStatus]       = useState<"idle" | "connecting" | "ready" | "error">("idle");
   const [statusMsg, setStatusMsg] = useState("");
@@ -571,10 +628,6 @@ export default function RealTimeVoice() {
   const [syncing, setSyncing]         = useState(false);
   const [vadLevel, setVadLevel]   = useState(0);
   const [useWorklet, setUseWorklet] = useState(true); // AudioWorklet vs ScriptProcessorNode fallback
-  const [whisperModel, setWhisperModel] = useState<string>("small");
-  const [loadedModels, setLoadedModels] = useState<string[]>([]);
-  const [loadingModel, setLoadingModel] = useState<string | null>(null); // model currently pre-loading
-  const [allowModelDownload, setAllowModelDownload] = useState<boolean>(true); // false in production
 
   const wsRef        = useRef<ReturnType<typeof openRealtimeSession> | null>(null);
   const streamRef    = useRef<MediaStream | null>(null);
@@ -585,6 +638,9 @@ export default function RealTimeVoice() {
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const energyRef    = useRef<number>(0);
   const vadTimerRef  = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Plays each translated clip aloud the moment it arrives, so the user HEARS the
+  // translation live without clicking Play. Kept on a ref so a new clip stops the previous.
+  const livePlayerRef = useRef<HTMLAudioElement | null>(null);
   const { user, isAuthenticated } = useAuth();
   const { voices } = useVoices();
   const { defaultVoiceId } = useVoice();
@@ -605,17 +661,12 @@ export default function RealTimeVoice() {
     }
   }, [isAuthenticated, defaultVoiceId, voices]);
 
-  // ── Fetch which Whisper models are already loaded on the server ──
+  // The output language drives the voice engine: English defaults to Orpheus (fast streaming,
+  // Chatterbox still selectable); any other language snaps to Chatterbox (Orpheus is English-only).
   useEffect(() => {
-    getAcousticModels()
-      .then((info) => {
-        setLoadedModels(info.loaded);
-        setAllowModelDownload(info.allow_download ?? true);
-        // Default to server's default if our current selection isn't loaded
-        if (!info.loaded.includes(whisperModel)) setWhisperModel(info.default);
-      })
-      .catch(() => {}); // silent — server may be warming up
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    setTtsEngine(orpheusAvailable ? "orpheus" : "chatterbox");
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tgtLang]);
 
   // ── Restore collections from IndexedDB on mount ──
   useEffect(() => {
@@ -632,6 +683,7 @@ export default function RealTimeVoice() {
           langPair:    sc.langPair,
           srcLang:     sc.srcLang,
           tgtLang:     sc.tgtLang,
+          cloudId:     sc.cloudId,
         }));
       }
       setCollections(rehydrated);
@@ -659,6 +711,7 @@ export default function RealTimeVoice() {
             langPair:    pair,
             srcLang:     d.src_lang,
             tgtLang:     d.tgt_lang,
+            cloudId:     item.id,   // cloud-synced clips are keyed by their MongoDB id
           },
           ...(rehydrated[pair] ?? []),
         ];
@@ -666,6 +719,34 @@ export default function RealTimeVoice() {
       setCollections(rehydrated);
     } catch { /* silent */ } finally { setSyncing(false); }
   }, [isAuthenticated, syncing]);
+
+  // ── Delete: single clip + whole collection (IndexedDB + cloud, both best-effort) ──
+  const removeClip = useCallback(async (pair: string, clip: AudioMessage) => {
+    // Optimistic UI removal first so it feels instant.
+    setCollections((prev) => {
+      const list = (prev[pair] ?? []).filter((c) => c.id !== clip.id);
+      const next = { ...prev };
+      if (list.length) next[pair] = list; else delete next[pair];
+      return next;
+    });
+    setMessages((prev) => prev.filter((m) => m.id !== clip.id));
+    try { await deleteClipIDB(clip.id); } catch { /* best-effort local delete */ }
+    if (isAuthenticated && clip.cloudId) {
+      try { await deleteHistoryItem(clip.cloudId); } catch { /* best-effort cloud delete */ }
+    }
+  }, [isAuthenticated]);
+
+  const removeCollection = useCallback(async (pair: string) => {
+    const clips = collections[pair] ?? [];
+    setCollections((prev) => { const next = { ...prev }; delete next[pair]; return next; });
+    setMessages((prev) => prev.filter((m) => m.langPair !== pair));
+    for (const c of clips) {
+      try { await deleteClipIDB(c.id); } catch { /* best-effort */ }
+      if (isAuthenticated && c.cloudId) {
+        try { await deleteHistoryItem(c.cloudId); } catch { /* best-effort */ }
+      }
+    }
+  }, [collections, isAuthenticated]);
 
   // VAD energy bar — smooth mic energy for display
   useEffect(() => {
@@ -679,12 +760,12 @@ export default function RealTimeVoice() {
 
   // Computed options for LanguageSelect. Input (SPEAK IN) can be any language the
   // recognizer handles; OUTPUT is restricted to languages a TTS engine can speak
-  // (English/Chinese via F5, the 11 Indian languages via IndicF5) — the engine is
+  // (Chatterbox: 23 global + 8 Indian languages) — the engine is
   // then auto-chosen from the output language server-side.
   const rtLangOptions: LangOption[] = Object.entries(LANGUAGES).map(([k, v]) => ({
     value: k, label: v.name, flag: v.flag, group: v.group,
   }));
-  const rtOutputLangOptions: LangOption[] = rtLangOptions.filter((o) => SUPPORTED_TTS_LANGS.includes(o.value));
+  const rtOutputLangOptions: LangOption[] = rtLangOptions.filter((o) => CHATTERBOX_TTS_LANGS.includes(o.value));
 
   // Handle WebSocket events
   const handleEvent = useCallback((event: RealtimeEvent) => {
@@ -702,6 +783,14 @@ export default function RealTimeVoice() {
         id: clipId, wavUrl: url, timestamp: now,
         langPair: pair, srcLang, tgtLang,
       };
+      // Play the translated utterance aloud immediately so the user HEARS it live
+      // (the Start-button gesture unlocked audio, so this plays without a click).
+      try {
+        livePlayerRef.current?.pause();
+        const player = new Audio(url);
+        livePlayerRef.current = player;
+        void player.play().catch(() => {});
+      } catch { /* autoplay can be blocked before a user gesture — Play button still works */ }
       // Keep last clip visible in live area
       setMessages((prev) => [msg, ...prev.slice(0, 0)]);
       // Persist in collections
@@ -720,13 +809,12 @@ export default function RealTimeVoice() {
       if (isAuthenticated) {
         saveLiveTranslationClip(blob, { srcLang, tgtLang, transcript: "", translation: "", timestamp: now })
           .then((result) => {
-            if (result.cloud_url) {
-              updateClipCloud(clipId, result.cloud_url, result.id, result.local_path ?? undefined);
-              setCollections((prev) => {
-                const list = prev[pair] ?? [];
-                return { ...prev, [pair]: list.map((c) => c.id === clipId ? { ...c, wavUrl: result.cloud_url ?? c.wavUrl } : c) };
-              });
-            }
+            // Record the cloud id (result.id) so this clip can be deleted from the cloud later.
+            updateClipCloud(clipId, result.cloud_url ?? "", result.id, result.local_path ?? undefined);
+            setCollections((prev) => {
+              const list = prev[pair] ?? [];
+              return { ...prev, [pair]: list.map((c) => c.id === clipId ? { ...c, cloudId: result.id, wavUrl: result.cloud_url ?? c.wavUrl } : c) };
+            });
           }).catch(() => {});
       }
     } else if (event.type === "error") {
@@ -769,16 +857,16 @@ export default function RealTimeVoice() {
     }
     streamRef.current = stream;
 
-    // 2. WebSocket session — IndicF5 clones from the selected voice (or the default
-    //    reference when none is chosen).
+    // 2. WebSocket session — Chatterbox clones from the selected voice (or the default
+    //    reference when none is chosen); Orpheus uses a fixed preset voice, so no voiceId.
     const session = openRealtimeSession(
       {
         srcLang,
         tgtLang,
-        voiceId: voiceId || "",
+        voiceId: canSelectVoice ? (voiceId || "") : "",
         sampleRate: SAMPLE_RATE,
-        whisperModel,
         engine,
+        ttsEngine,
       },
       handleEvent,
       isAuthenticated ? user?.tenants?.[0] : undefined,
@@ -833,7 +921,7 @@ export default function RealTimeVoice() {
     }
 
     setActive(true);
-  }, [active, srcLang, tgtLang, voiceId, whisperModel, engine, handleEvent, isAuthenticated, user, useWorklet, sendFloat32Chunk]);
+  }, [active, srcLang, tgtLang, voiceId, engine, ttsEngine, canSelectVoice, handleEvent, isAuthenticated, user, useWorklet, sendFloat32Chunk]);
 
   const stopSession = useCallback(() => {
     wsRef.current?.close();
@@ -848,6 +936,9 @@ export default function RealTimeVoice() {
 
     processorRef.current?.disconnect();
     processorRef.current = null;
+
+    livePlayerRef.current?.pause();
+    livePlayerRef.current = null;
 
     contextRef.current?.close().catch(() => {});
     contextRef.current = null;
@@ -876,7 +967,7 @@ export default function RealTimeVoice() {
         </div>
         <div>
           <div className="vm-card-title">Real-Time Voice Translation</div>
-          <div className="vm-card-subtitle">VAD → faster-whisper → {engine === "qwen" ? "Qwen" : "NLLB"} → {engineForLang(tgtLang) === "indicf5" ? "IndicF5" : "F5"}</div>
+          <div className="vm-card-subtitle">VAD → faster-whisper → {engine === "qwen" ? "Qwen" : "NLLB"} → {ttsEngine === "orpheus" ? "Orpheus" : "Chatterbox"}</div>
         </div>
         {active && (
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -914,28 +1005,62 @@ export default function RealTimeVoice() {
         </div>
       </div>
 
-      {/* Voice selector — IndicF5 clones the chosen reference (zero-shot, no training) */}
+      {/* Voice engine — Orpheus only appears for English output; other languages are Chatterbox */}
       <div style={{ marginBottom: 10 }}>
-        <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Voice</div>
-        <select className="vm-select" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={active} style={{ fontSize: 12 }}>
-          <option value="">Default IndicF5 voice</option>
-          {/* Cloned voices are account-scoped — only offered to signed-in users. */}
-          {isAuthenticated && voices.map((v) => (
-            <option key={v.voice_id} value={v.voice_id}>
-              {v.name || v.voice_id}{v.language ? ` (${v.language.toUpperCase()})` : ""}
-            </option>
-          ))}
-        </select>
-        <div style={{ fontSize: 9, color: "var(--text-faint)", marginTop: 3, paddingLeft: 2 }}>
-          {voiceId
-            ? "Zero-shot clone of your reference — no training needed."
-            : "Built-in IndicF5 reference. Pick a Voice Library entry to clone your own."}
+        <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Voice engine</div>
+        <div role="group" aria-label="Voice engine" style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
+          {TTS_ENGINE_OPTIONS.filter((e) => e.id === "chatterbox" || orpheusAvailable).map((e) => {
+            const activeEngine = ttsEngine === e.id;
+            return (
+              <button
+                key={e.id}
+                type="button"
+                onClick={() => setTtsEngine(e.id)}
+                disabled={active}
+                aria-pressed={activeEngine}
+                style={{
+                  display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
+                  padding: "5px 10px", borderRadius: 8, cursor: active ? "not-allowed" : "pointer", textAlign: "left",
+                  border: `1px solid ${activeEngine ? "var(--bamboo-500, #6d9f37)" : "var(--border-subtle)"}`,
+                  background: activeEngine ? "rgba(109,159,55,0.10)" : "var(--surface-subtle)",
+                  opacity: active ? 0.6 : 1, fontSize: 11,
+                }}
+              >
+                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, color: "var(--text-primary)" }}>
+                  <span style={{ width: 6, height: 6, borderRadius: "50%", background: activeEngine ? "var(--bamboo-500, #6d9f37)" : "var(--border-strong, #ccc)" }} />
+                  {e.name}
+                </span>
+                <span style={{ color: "var(--text-muted)", fontSize: 9 }}>{e.hint}</span>
+              </button>
+            );
+          })}
         </div>
       </div>
 
+      {/* Voice selector — Chatterbox only. Orpheus is a fixed-voice English engine (no cloning). */}
+      {canSelectVoice && (
+        <div style={{ marginBottom: 10 }}>
+          <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Voice</div>
+          <select className="vm-select" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={active} style={{ fontSize: 12 }}>
+            <option value="">Default Chatterbox voice</option>
+            {/* Cloned voices are account-scoped — only offered to signed-in users. */}
+            {isAuthenticated && voices.map((v) => (
+              <option key={v.voice_id} value={v.voice_id}>
+                {v.name || v.voice_id}{v.language ? ` (${v.language.toUpperCase()})` : ""}
+              </option>
+            ))}
+          </select>
+          <div style={{ fontSize: 9, color: "var(--text-faint)", marginTop: 3, paddingLeft: 2 }}>
+            {voiceId
+              ? "Zero-shot clone of your reference — no training needed."
+              : "Built-in Chatterbox reference. Pick a Voice Library entry to clone your own."}
+          </div>
+        </div>
+      )}
+
       {/* Translation engine */}
       <div style={{ marginBottom: 10 }}>
-        <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Engine</div>
+        <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Translation engine</div>
         <EngineToggle value={engine} onChange={setEngine} disabled={active} />
       </div>
 
@@ -952,136 +1077,34 @@ export default function RealTimeVoice() {
         </div>
       )}
 
-      {/* Whisper model selector — only shown before session starts */}
+      {/* Transcription model — the realtime pipeline runs a fixed in-process faster-whisper
+          model on the router (not switchable per session), so this is a read-only indicator. */}
       {!active && status !== "connecting" && (
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 10, color: "var(--gray-400)", textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 5 }}>
-            Transcription Model
+            Transcription
           </div>
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
-            {([
-              { id: "tiny",         label: "Tiny",     hint: "Fastest",  mb: "~75 MB" },
-              { id: "base",         label: "Base",     hint: "Fast",     mb: "~145 MB" },
-              { id: "small",        label: "Small",    hint: "Balanced", mb: "~460 MB" },
-              { id: "medium",       label: "Medium",   hint: "Accurate", mb: "~1.5 GB" },
-              { id: "large-v2",     label: "Large v2", hint: "Best",     mb: "~3 GB" },
-              { id: "large-v3",     label: "Large v3", hint: "Latest",   mb: "~3 GB" },
-            ] as const).map(({ id, label, hint, mb }) => {
-              const isLoaded = loadedModels.includes(id);
-              const isLoading = loadingModel === id;
-              const selected = whisperModel === id;
-              return (
-                <button
-                  key={id}
-                  onClick={() => {
-                    setWhisperModel(id);
-                    // Only trigger download in dev (allow_download=true) and if not already loaded/loading
-                    if (!isLoaded && !isLoading && allowModelDownload) {
-                      setLoadingModel(id);
-                      preloadAcousticModel(id)
-                        .then(() => {
-                          // Poll until it appears in loadedModels
-                          const poll = setInterval(() => {
-                            getAcousticModels().then((info) => {
-                              setLoadedModels(info.loaded);
-                              if (info.loaded.includes(id)) {
-                                setLoadingModel(null);
-                                clearInterval(poll);
-                              }
-                            }).catch(() => {});
-                          }, 2000);
-                        })
-                        .catch(() => setLoadingModel(null));
-                    }
-                  }}
-                  title={isLoaded ? `${label} (${mb}) — loaded` : isLoading ? `${label} (${mb}) — downloading…` : `${label} (${mb}) — click to download`}
-                  style={{
-                    background: selected ? "rgba(109,159,55,0.15)" : "var(--surface-subtle)",
-                    border: `1px solid ${selected ? "rgba(109,159,55,0.45)" : isLoading ? "rgba(234,179,8,0.45)" : "var(--border-subtle)"}`,
-                    borderRadius: 6, padding: "4px 9px", cursor: "pointer",
-                    display: "flex", flexDirection: "column", alignItems: "center", gap: 1,
-                    transition: "border-color 0.1s, background 0.1s",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: 4 }}>
-                    <span style={{ fontSize: 11, fontWeight: selected ? 600 : 400, color: selected ? "var(--bamboo-400)" : "var(--gray-300)" }}>
-                      {label}
-                    </span>
-                    {isLoading ? (
-                      /* spinning ring while downloading */
-                      <div style={{
-                        width: 7, height: 7, borderRadius: "50%", flexShrink: 0,
-                        border: "1.5px solid rgba(234,179,8,0.25)",
-                        borderTopColor: "#eab308",
-                        animation: "spin 0.8s linear infinite",
-                      }} />
-                    ) : (
-                      /* dot: green = loaded, grey = not downloaded */
-                      <div style={{ width: 5, height: 5, borderRadius: "50%", background: isLoaded ? "#4ade80" : "var(--gray-600)", flexShrink: 0 }} />
-                    )}
-                  </div>
-                  <span style={{ fontSize: 9, color: selected ? "var(--bamboo-500)" : "var(--gray-600)" }}>
-                    {isLoading ? "Downloading…" : hint}
-                  </span>
-                </button>
-              );
-            })}
+          <div style={{
+            display: "flex", alignItems: "center", gap: 8, padding: "7px 10px",
+            borderRadius: 8, background: "var(--surface-subtle)", border: "1px solid var(--border-subtle)",
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: "50%", background: "#4ade80", flexShrink: 0 }} />
+            <span style={{ fontSize: 12, fontWeight: 600, color: "var(--text-primary)" }}>{REALTIME_STT_MODEL}</span>
+            <span style={{ fontSize: 10, color: "var(--text-muted)", marginLeft: "auto" }}>fixed · highest accuracy</span>
           </div>
-
-          {/* Inline download progress banner — dev only */}
-          {loadingModel && allowModelDownload && (
-            <div style={{
-              marginTop: 8, padding: "8px 10px", borderRadius: 6,
-              background: "rgba(234,179,8,0.07)",
-              border: "1px solid rgba(234,179,8,0.25)",
-              display: "flex", alignItems: "center", gap: 8,
-            }}>
-              <div className="vm-spinner" style={{ width: 12, height: 12, borderWidth: 2, borderTopColor: "#eab308", flexShrink: 0 }} />
-              <div>
-                <div style={{ fontSize: 11, fontWeight: 500, color: "#ca8a04" }}>
-                  Downloading {loadingModel} model…
-                </div>
-                <div style={{ fontSize: 10, color: "var(--gray-500)", marginTop: 1 }}>
-                  {loadingModel === "medium" ? "~1.5 GB" : loadingModel === "large-v2" || loadingModel === "large-v3" ? "~3 GB" : loadingModel === "small" ? "~460 MB" : "~145 MB"} — saved to model volume, only downloaded once.
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Production: model not available — must be pre-provisioned */}
-          {!allowModelDownload && !loadedModels.includes(whisperModel) && (
-            <div style={{
-              marginTop: 8, padding: "7px 10px", borderRadius: 6,
-              background: "rgba(239,68,68,0.07)",
-              border: "1px solid rgba(239,68,68,0.2)",
-              fontSize: 10, color: "#f87171",
-            }}>
-              Model <strong>{whisperModel}</strong> is not provisioned on this server. Contact your administrator to add it to the model volume.
-            </div>
-          )}
-
-          {allowModelDownload && !loadingModel && !loadedModels.includes(whisperModel) && (
-            <div style={{ fontSize: 10, color: "var(--gray-500)", marginTop: 5 }}>
-              Click a model to download it. Green dot = ready.
-            </div>
-          )}
         </div>
       )}
 
       {/* Start / Stop */}
       <button
         className={`vm-btn ${active || status === "connecting" ? "vm-btn-danger" : "vm-btn-primary"}`}
-        style={{ width: "100%", gap: 8, opacity: (!active && (loadingModel || (!allowModelDownload && !loadedModels.includes(whisperModel)))) ? 0.5 : 1, pointerEvents: (!active && (loadingModel || (!allowModelDownload && !loadedModels.includes(whisperModel)))) ? "none" : "auto" }}
+        style={{ width: "100%", gap: 8 }}
         onClick={active || status === "connecting" ? stopSession : startSession}
-        disabled={!active && (!!loadingModel || (!allowModelDownload && !loadedModels.includes(whisperModel)))}
-        title={(!active && loadingModel) ? `Waiting for ${loadingModel} model to finish downloading…` : (!active && !allowModelDownload && !loadedModels.includes(whisperModel)) ? `Model '${whisperModel}' is not provisioned on this server` : undefined}
       >
         {status === "connecting" ? (
           <><div className="vm-spinner" /><span>Connecting… (click to cancel)</span></>
         ) : active ? (
           <><Square size={14} strokeWidth={2.5} /><span>Stop</span></>
-        ) : loadingModel ? (
-          <><div className="vm-spinner" /><span>Downloading {loadingModel}…</span></>
         ) : (
           <><Mic size={14} strokeWidth={2.5} /><span>Start Live Translation</span></>
         )}
@@ -1103,7 +1126,12 @@ export default function RealTimeVoice() {
           <div style={{ fontSize: 10, color: "var(--text-faint)", textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 6 }}>
             Latest
           </div>
-          <RealtimeClip msg={messages[0]} tgtLang={tgtLang} flag={LANGUAGES[tgtLang]?.flag ?? ""} />
+          <RealtimeClip
+            msg={messages[0]}
+            tgtLang={tgtLang}
+            flag={LANGUAGES[tgtLang]?.flag ?? ""}
+            onDelete={() => removeClip(messages[0].langPair ?? `${srcLang}_${tgtLang}`, messages[0])}
+          />
         </div>
       )}
 
@@ -1178,12 +1206,17 @@ export default function RealTimeVoice() {
           langPair={openFolder}
           clips={collections[openFolder]}
           onClose={() => setOpenFolder(null)}
+          onDeleteClip={(id) => {
+            const clip = collections[openFolder]?.find((c) => c.id === id);
+            if (clip) void removeClip(openFolder, clip);
+          }}
+          onDeleteCollection={() => void removeCollection(openFolder)}
         />
       )}
 
       {/* Info footer */}
       <div className="vm-info" style={{ marginTop: 10 }}>
-        Silero VAD → faster-whisper → translate → <strong>{engineForLang(tgtLang) === "indicf5" ? "IndicF5" : "F5-TTS"} zero-shot</strong>.
+        Silero VAD → faster-whisper → translate → <strong>{ttsEngine === "orpheus" ? "Orpheus streaming" : "Chatterbox zero-shot"}</strong>.
         {" "}AudioWorklet runs in a dedicated thread for glitch-free capture.
       </div>
 

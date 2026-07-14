@@ -173,7 +173,7 @@ export default function VoiceLibraryModal({ onClose }: Props) {
   const handleSetDefault = (v: VoiceInfo) => {
     if (defaultVoiceId === v.voice_id) {
       setDefaultVoice(null);
-      notify.info("Default cleared", "Text to Speech will use the built-in IndicF5 voice.");
+      notify.info("Default cleared", "Text to Speech will use the built-in Chatterbox voice.");
     } else {
       setDefaultVoice(v.voice_id);
       notify.success(`"${v.name || v.voice_id}" set as default`);
