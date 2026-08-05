@@ -111,7 +111,13 @@ export default function SettingsPage() {
             title="Text to speech"
             subtitle="Generates spoken audio, including cloned voices"
             rows={catalog.tts}
-            active={settings.tts_provider ?? catalog.active.tts}
+            /* Only the tenant's OWN selection counts as active. Falling back to
+               catalog.active here rendered the platform default as "In use"
+               with its button disabled, so a tenant who had chosen nothing
+               could never choose anything — the one engine they might want was
+               the one locked out. The fallback is surfaced as a hint instead. */
+            active={settings.tts_provider ?? ""}
+            fallback={catalog.active.tts}
             kind="tts"
             saving={saving}
             byok={settings.byok_configured}
@@ -124,7 +130,8 @@ export default function SettingsPage() {
             title="Speech to text"
             subtitle="Transcribes microphone and uploaded audio"
             rows={catalog.stt}
-            active={settings.stt_provider ?? catalog.active.stt}
+            active={settings.stt_provider ?? ""}
+            fallback={catalog.active.stt}
             kind="stt"
             saving={saving}
             byok={settings.byok_configured}
@@ -279,6 +286,7 @@ function EngineCard({
   kind,
   saving,
   byok,
+  fallback,
   onChoose,
   onKeyChanged,
   showVoices = false,
@@ -288,6 +296,9 @@ function EngineCard({
   subtitle: string;
   rows: EngineRow[];
   active: string;
+  /** Platform default used when the tenant has not chosen. Labelled, never
+   *  treated as a selection. */
+  fallback: string;
   kind: "tts" | "stt";
   saving: string;
   byok: string[];
@@ -312,6 +323,7 @@ function EngineCard({
             row={r}
             kind={kind}
             isActive={r.id === active}
+            isFallback={!active && r.id === fallback}
             isSaving={saving === `${kind}:${r.id}`}
             hasOwnKey={byok.includes(r.id)}
             onChoose={onChoose}
@@ -328,6 +340,7 @@ function EngineRowItem({
   row,
   kind,
   isActive,
+  isFallback,
   isSaving,
   hasOwnKey,
   onChoose,
@@ -337,6 +350,9 @@ function EngineRowItem({
   row: EngineRow;
   kind: "tts" | "stt";
   isActive: boolean;
+  /** Platform default while the tenant has chosen nothing — labelled, but
+   *  still selectable so the choice can be made explicit. */
+  isFallback: boolean;
   isSaving: boolean;
   hasOwnKey: boolean;
   onChoose: (kind: "tts" | "stt", id: string) => Promise<void>;
@@ -394,7 +410,7 @@ function EngineRowItem({
             disabled={!row.selectable || isActive || isSaving}
             onClick={() => void onChoose(kind, row.id)}
           >
-            {isSaving ? "Saving…" : isActive ? "In use" : "Use"}
+            {isSaving ? "Saving…" : isActive ? "In use" : isFallback ? "Use (default)" : "Use"}
           </button>
         </div>
       </div>
