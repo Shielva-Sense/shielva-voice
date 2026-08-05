@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { LogIn, LogOut, User, Sun, Moon, Cloud, HardDrive, SlidersHorizontal } from "lucide-react";
+import { LogIn, LogOut, User, Sun, Moon, Cloud, HardDrive } from "lucide-react";
 import Image from "next/image";
 import SessionTimer from "./components/SessionTimer";
 import Showcase from "./components/Showcase";
@@ -121,13 +121,6 @@ export default function Home() {
 
           {/* Global sync — authenticated users only */}
           {isAuthenticated && <SyncWidget />}
-
-          {/* Engine settings — which providers drive STT/TTS for this tenant */}
-          {isAuthenticated && (
-            <a href="/settings" className="vm-theme-toggle" title="Engine settings">
-              <SlidersHorizontal size={15} strokeWidth={2} />
-            </a>
-          )}
 
           <button
             className="vm-theme-toggle"
@@ -329,7 +322,10 @@ export default function Home() {
           border-bottom-color: currentColor;
         }
         @media (max-width: 860px) {
-          .vm-nav { display: none; }
+          /* Marketing anchors are noise on small screens, but Settings is the
+             only way in — it was previously lost with the rest of the nav. */
+          .vm-nav a:not([href="/settings"]) { display: none; }
+          .vm-nav { margin-left: 18px; gap: 0; }
         }
 
         /* ── Marketing sections ──────────────────────────────────── */

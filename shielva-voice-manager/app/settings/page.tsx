@@ -72,19 +72,20 @@ export default function SettingsPage() {
 
   if (status === "loading") {
     return (
-      <main className="mx-auto max-w-4xl px-6 py-16">
-        <div className="flex items-center gap-3 text-neutral-500">
-          <Loader2 size={16} className="animate-spin" />
-          Checking each engine&apos;s availability…
-        </div>
+      <main className="mx-auto flex min-h-[70vh] max-w-4xl flex-col items-center justify-center px-6">
+        <Loader2 size={28} className="animate-spin text-neutral-400" aria-hidden="true" />
+        <p className="mt-4 text-[15px] font-medium">Checking engine availability</p>
+        <p className="mt-1 text-[13px] text-neutral-500">
+          Each engine is probed live, so you only see what you can actually use.
+        </p>
       </main>
     );
   }
 
   if (status === "error" || !catalog || !settings) {
     return (
-      <main className="mx-auto max-w-4xl px-6 py-16">
-        <div className="rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/40">
+      <main className="mx-auto flex min-h-[70vh] max-w-xl items-center px-6">
+        <div className="w-full rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/40">
           <p className="font-medium text-red-800 dark:text-red-300">Could not load engine settings</p>
           <p className="mt-1 text-sm text-red-700 dark:text-red-400">{error}</p>
           <button
