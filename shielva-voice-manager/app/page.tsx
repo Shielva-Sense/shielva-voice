@@ -1,16 +1,14 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
-import { LogIn, LogOut, User, Crown, Sun, Moon, Cloud, HardDrive, SlidersHorizontal } from "lucide-react";
+import { useEffect, useState } from "react";
+import { LogIn, LogOut, User, Sun, Moon, Cloud, HardDrive, SlidersHorizontal } from "lucide-react";
 import Image from "next/image";
-import { SERVICES, fetchAmtHealth, type ServiceHealth } from "./lib/amt-api";
 import SessionTimer from "./components/SessionTimer";
 import SpeechToText from "./components/SpeechToText";
 import TextToSpeech from "./components/TextToSpeech";
 import VoiceLibrary from "./components/VoiceLibrary";
 import Translator from "./components/Translator";
 import IntentClassifier from "./components/IntentClassifier";
-import SystemStatus from "./components/SystemStatus";
 import RealTimeVoice from "./components/RealTimeVoice";
 import AnalyticsWidget from "./components/AnalyticsWidget";
 import VoiceTraining from "./components/VoiceTraining";
@@ -19,12 +17,28 @@ import { useAuth } from "./context/AuthContext";
 import { useStorage } from "./context/StorageContext";
 import SyncWidget from "./components/SyncWidget";
 
+/** Marketing copy lives at module scope — it is static, so rebuilding these
+ *  arrays on every render would be pure waste. */
+const CAPABILITIES = [
+  { title: "Speech recognition", body: "Accurate transcription across languages, with word-level timing and confidence you can act on." },
+  { title: "Natural speech", body: "Low-latency synthesis that streams the first audio in well under a second." },
+  { title: "Voice cloning", body: "Build a custom voice from a short sample, then use it anywhere synthesis is available." },
+  { title: "Translation", body: "Move between languages while keeping the speaker's voice and intent intact." },
+  { title: "Intent detection", body: "Turn what was said into what was meant, so your product can respond rather than transcribe." },
+  { title: "Bring your own engine", body: "Cloud GPU, Cartesia, ElevenLabs or Groq — chosen per tenant, switched without a redeploy." },
+] as const;
+
+const STEPS = [
+  { title: "Choose your engines", body: "Pick what drives transcription and speech. Availability and quota are checked live, so an engine you cannot use is never offered." },
+  { title: "Use your own account, or ours", body: "Add your provider key to bill it directly, or run on the platform's. Keys are encrypted at rest and never shown again." },
+  { title: "Ship it", body: "One integration stays put while the engine behind it changes — no client work when you switch provider." },
+] as const;
+
 export default function Home() {
-  const [health, setHealth] = useState<Record<string, ServiceHealth>>({});
   // SSR-safe: always "dark" on server (matches layout.tsx inline script fallback).
   // After mount, reads localStorage / time-based preference to avoid hydration mismatch.
   const [theme, setTheme] = useState<"dark" | "light">("dark");
-  const { user, isAuthenticated, isLoading, usageInfo, login, logout } = useAuth();
+  const { user, isAuthenticated, isLoading, login, logout } = useAuth();
   const { settings: storageSettings, activeMode, isLocalFallback, openModal: openStorageModal, configLoading: storageConfigLoading } = useStorage();
 
   // Hydrate theme from localStorage / time-of-day after first client render
@@ -43,21 +57,8 @@ export default function Home() {
     localStorage.setItem("vm-theme", theme);
   }, [theme]);
 
-  const refreshHealth = useCallback(async () => {
-    setHealth(await fetchAmtHealth());
-  }, []);
 
-  useEffect(() => {
-    refreshHealth();
-    const interval = setInterval(refreshHealth, 15000);
-    return () => clearInterval(interval);
-  }, [refreshHealth]);
 
-  const onlineCount = Object.values(health).filter((h) => h.status === "online" || h.status === "warming").length;
-
-  const planLabel = usageInfo?.plan
-    ? usageInfo.plan.charAt(0).toUpperCase() + usageInfo.plan.slice(1)
-    : null;
 
   return (
     <div className="vm-root">
@@ -71,6 +72,12 @@ export default function Home() {
             Shielva <span>Voice</span>
           </div>
         </div>
+
+        <nav className="vm-nav" aria-label="Primary">
+          <a href="#capabilities">Capabilities</a>
+          <a href="#how">How it works</a>
+          {isAuthenticated && <a href="/settings">Settings</a>}
+        </nav>
 
         <div className="vm-header-right">
           {/* Storage mode badge — authenticated users only (public auto-uses local /tmp silently) */}
@@ -117,26 +124,6 @@ export default function Home() {
           >
             {theme === "dark" ? <Sun size={15} strokeWidth={2} /> : <Moon size={15} strokeWidth={2} />}
           </button>
-          <span className="vm-header-service-count">
-            {onlineCount}/{SERVICES.length} online
-          </span>
-          <div className="vm-status-dots">
-            {SERVICES.map((svc) => (
-              <div
-                key={svc.key}
-                className={`vm-dot ${health[svc.key]?.status || "loading"}`}
-                title={`${svc.label}: ${health[svc.key]?.status || "checking..."}`}
-              />
-            ))}
-          </div>
-
-          {/* Plan badge — links to the usage & billing page */}
-          {isAuthenticated && planLabel && (
-            <a href="/plans" className="vm-plan-badge" title={`${planLabel} plan — Usage & billing`}>
-              <Crown size={12} strokeWidth={2.5} />
-              {planLabel}
-            </a>
-          )}
 
           {/* Public session countdown — only shown when not authenticated */}
           {!isLoading && !isAuthenticated && (
@@ -182,6 +169,38 @@ export default function Home() {
         )}
       </section>
 
+      {/* ─── Capabilities (marketing) ─── */}
+      <section id="capabilities" className="vm-marketing">
+        <h2>Everything a voice product needs, in one platform</h2>
+        <p className="vm-marketing-sub">
+          Swap the engine behind any capability without touching your integration.
+        </p>
+        <ul role="list" className="vm-cap-grid">
+          {CAPABILITIES.map((c) => (
+            <li key={c.title} className="vm-cap">
+              <h3>{c.title}</h3>
+              <p>{c.body}</p>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      {/* ─── How it works ─── */}
+      <section id="how" className="vm-marketing">
+        <h2>How it works</h2>
+        <ol className="vm-steps">
+          {STEPS.map((step, i) => (
+            <li key={step.title}>
+              <span className="vm-step-n" aria-hidden="true">{i + 1}</span>
+              <div>
+                <h3>{step.title}</h3>
+                <p>{step.body}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
+      </section>
+
       {/* ─── Feature Grid ─── */}
       <div className="vm-grid">
         {isAuthenticated && <AnalyticsWidget />}
@@ -200,15 +219,131 @@ export default function Home() {
         <Translator />
         {isAuthenticated && <IntentClassifier />}
         {isAuthenticated && <RealTimeVoice />}
-        {isAuthenticated && <SystemStatus health={health} onRefresh={refreshHealth} />}
       </div>
 
       {/* ─── Footer ─── */}
       <footer className="vm-footer">
-        Shielva Voice-AMT Engine v1.0 &middot; {SERVICES.length} Neural Services &middot; Multi-Tenant
+        Shielva Voice &middot; Speech recognition, synthesis and cloning &middot; Multi-tenant by design
       </footer>
 
       <style>{`
+        /* ── Primary nav ─────────────────────────────────────────── */
+        .vm-nav {
+          display: flex;
+          align-items: center;
+          gap: 22px;
+          margin-left: 34px;
+          margin-right: auto;
+        }
+        .vm-nav a {
+          color: var(--text-muted, #888);
+          font-size: 13px;
+          text-decoration: none;
+          /* Reserve the underline's space up front so hover doesn't shift the row. */
+          border-bottom: 1px solid transparent;
+          padding-bottom: 2px;
+          transition: color 0.15s ease, border-color 0.15s ease;
+        }
+        .vm-nav a:hover,
+        .vm-nav a:focus-visible {
+          color: var(--text, #eaeaea);
+          border-bottom-color: currentColor;
+        }
+        @media (max-width: 860px) {
+          .vm-nav { display: none; }
+        }
+
+        /* ── Marketing sections ──────────────────────────────────── */
+        .vm-marketing {
+          max-width: 1080px;
+          margin: 0 auto;
+          padding: 56px 24px 8px;
+        }
+        .vm-marketing h2 {
+          font-size: clamp(22px, 3vw, 30px);
+          font-weight: 600;
+          letter-spacing: -0.02em;
+          text-wrap: balance;
+          margin: 0;
+        }
+        .vm-marketing-sub {
+          margin: 8px 0 0;
+          color: var(--text-muted, #888);
+          font-size: 15px;
+          max-width: 62ch;
+        }
+
+        .vm-cap-grid {
+          list-style: none;
+          margin: 28px 0 0;
+          padding: 0;
+          display: grid;
+          gap: 1px;
+          /* Single-pixel gap over a rule colour: the cards read as one table of
+             capabilities rather than six floating boxes. */
+          background: var(--border, #1f1f1f);
+          border: 1px solid var(--border, #1f1f1f);
+          border-radius: 12px;
+          overflow: hidden;
+          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        }
+        .vm-cap {
+          background: var(--surface, #0d0d0d);
+          padding: 22px 20px;
+        }
+        .vm-cap h3 {
+          margin: 0 0 6px;
+          font-size: 15px;
+          font-weight: 600;
+        }
+        .vm-cap p {
+          margin: 0;
+          font-size: 13.5px;
+          line-height: 1.62;
+          color: var(--text-muted, #888);
+        }
+
+        .vm-steps {
+          list-style: none;
+          counter-reset: none;
+          margin: 26px 0 0;
+          padding: 0;
+          display: grid;
+          gap: 20px;
+          grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+        }
+        .vm-steps li {
+          display: flex;
+          gap: 14px;
+          align-items: flex-start;
+        }
+        .vm-step-n {
+          flex: 0 0 auto;
+          width: 26px;
+          height: 26px;
+          border-radius: 50%;
+          display: grid;
+          place-items: center;
+          font-size: 12px;
+          font-variant-numeric: tabular-nums;
+          color: var(--accent, #8ec07c);
+          border: 1px solid currentColor;
+        }
+        .vm-steps h3 {
+          margin: 2px 0 5px;
+          font-size: 14.5px;
+          font-weight: 600;
+        }
+        .vm-steps p {
+          margin: 0;
+          font-size: 13.5px;
+          line-height: 1.62;
+          color: var(--text-muted, #888);
+        }
+
+        @media (prefers-reduced-motion: reduce) {
+          .vm-nav a { transition: none; }
+        }
         .vm-auth-user {
           display: flex;
           align-items: center;
@@ -263,29 +398,6 @@ export default function Home() {
         }
         .vm-hero-signin-link:hover {
           color: var(--bamboo-300, #c5e08a);
-        }
-        a.vm-plan-badge {
-          text-decoration: none;
-        }
-        .vm-plan-badge:hover {
-          background: rgba(109,159,55,0.2);
-          border-color: var(--bamboo-500, #6d9f37);
-        }
-        .vm-plan-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 4px;
-          font-size: 11px;
-          font-weight: 600;
-          color: var(--bamboo-400, #a3c96e);
-          background: rgba(109,159,55,0.1);
-          border: 1px solid rgba(109,159,55,0.25);
-          border-radius: 12px;
-          padding: 2px 10px 2px 7px;
-          letter-spacing: 0.3px;
-          text-transform: capitalize;
-          cursor: pointer;
-          transition: background 0.15s, border-color 0.15s;
         }
       `}</style>
     </div>
