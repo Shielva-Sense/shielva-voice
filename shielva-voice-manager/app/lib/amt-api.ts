@@ -250,14 +250,24 @@ export async function fetchSessionTiming(): Promise<SessionTiming | null> {
 }
 
 export async function listVoices(): Promise<{ voices: VoiceInfo[]; total: number }> {
+  // The cloned-voice store lives behind the AMT (cloud-GPU) service, which is
+  // not deployed in every environment — there it 404s and the library rendered
+  // "Voices could not be loaded" forever. Presence serves the voices of the
+  // engine the tenant actually selected, so prefer that and treat a missing
+  // AMT as "no cloned voices yet" rather than an error.
   const res = await fetch(`${AMT_BASE}/amt/v1/voices`, {
     headers: amtHeaders(),
     credentials: "include",
   });
   await handleQuotaError(res);
-  if (!res.ok) throw new Error("Failed to list voices");
-  const data = await res.json();
-  return { ...data, voices: data.voices || [] };
+  if (res.ok) {
+    const data = await res.json();
+    return { ...data, voices: data.voices || [] };
+  }
+  if (res.status === 404) {
+    return { voices: [], total: 0 };
+  }
+  throw new Error(`Failed to list voices (HTTP ${res.status})`);
 }
 
 /** A single progress frame emitted by the enroll SSE stream. */
