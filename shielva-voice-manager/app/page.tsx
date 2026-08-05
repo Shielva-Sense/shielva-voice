@@ -266,8 +266,8 @@ export default function Home() {
           {/* The active engines, stated plainly — a tenant on Cartesia should
               not have to guess which stack their audio is hitting. */}
           <div className="vm-active-engines">
-            <span>Speech to text: <b>{engineLabel(gate.stt!)}</b></span>
-            <span>Text to speech: <b>{engineLabel(gate.tts!)}</b></span>
+            <span>Speech to text: <b>{gate.stt ? engineLabel(gate.stt) : "Platform default"}</b></span>
+            <span>Text to speech: <b>{gate.tts ? engineLabel(gate.tts) : "Platform default"}</b></span>
             <a href="/settings">Change</a>
             <style>{`
               .vm-active-engines {
@@ -290,9 +290,9 @@ export default function Home() {
                 (Qwen / NLLB run on our stack). Hosted vendors do not offer
                 them, so showing those controls on Cartesia or ElevenLabs
                 would advertise something the selected engine cannot do. */}
-            {gate.isCloudGpuTts && <Translator />}
-            {gate.isCloudGpuTts && <IntentClassifier />}
-            {gate.isCloudGpuTts && <RealTimeVoice />}
+            {(gate.isCloudGpuTts || !gate.tts) && <Translator />}
+            {(gate.isCloudGpuTts || !gate.tts) && <IntentClassifier />}
+            {(gate.isCloudGpuTts || !gate.tts) && <RealTimeVoice />}
           </div>
         </>
       )}

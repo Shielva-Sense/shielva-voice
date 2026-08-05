@@ -67,7 +67,12 @@ export function useEngineGate(enabled: boolean): EngineGate {
   let ready = false;
   let reason = "";
   if (err) {
-    reason = err;
+    // FAIL OPEN. The settings endpoint being unreachable is OUR outage, not the
+    // tenant's misconfiguration — blocking the tools behind it turns a backend
+    // problem into a dead-end page with nowhere to go. Tools fall back to the
+    // platform defaults, exactly as they behaved before the gate existed.
+    ready = true;
+    reason = "";
   } else if (!tts && !stt) {
     reason = "Choose a speech-to-text and a text-to-speech engine in Settings before using these tools.";
   } else if (!tts) {
@@ -85,6 +90,9 @@ export function useEngineGate(enabled: boolean): EngineGate {
   } else {
     ready = true; // settings present, catalog unavailable — do not block on a probe outage
   }
+  // With no selection stored AND no settings backend, there is nothing to choose
+  // from — fall back rather than stranding the user.
+  if (!ready && !tts && !stt && err) ready = true;
 
   return {
     loading,
