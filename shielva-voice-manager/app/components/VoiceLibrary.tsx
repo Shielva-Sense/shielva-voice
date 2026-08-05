@@ -22,6 +22,17 @@ export default function VoiceLibrary() {
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [langFilter, setLangFilter] = useState<string>("");
   const [showModal, setShowModal] = useState(false);
+  /** Ids removed locally so the row disappears the moment the server confirms,
+   *  instead of lingering until the refetch lands. `voices` comes from React
+   *  Query, so it cannot be mutated directly. */
+  const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
+  /** Pending destructive action awaiting in-UI confirmation. Native
+   *  window.confirm is not used anywhere in this codebase. */
+  const [confirming, setConfirming] = useState<
+    { kind: "one"; id: string; label: string } | { kind: "many"; ids: string[]; label: string } | null
+  >(null);
 
   const voiceAudioUrls = useRef<Record<string, string>>({});
   const voiceAudioEl = useRef<HTMLAudioElement | null>(null);
@@ -99,9 +110,9 @@ export default function VoiceLibrary() {
   };
 
   // ── Delete ─────────────────────────────────────────────────────────────────
-  const handleDelete = async (id: string) => {
-    if (deletingId === id) return;
-    setDeletingId(id);
+
+  /** Release anything this voice holds locally before the row disappears. */
+  const releaseLocalState = (id: string) => {
     if (playingVoiceId === id) {
       voiceAudioEl.current?.pause();
       setPlayingVoiceId(null);
@@ -111,25 +122,109 @@ export default function VoiceLibrary() {
       delete voiceAudioUrls.current[id];
     }
     if (defaultVoiceId === id) setDefaultVoice(null);
-    const label = voices.find((v) => v.voice_id === id)?.name || id;
+  };
+
+  /**
+   * Remove one voice from both stores.
+   *
+   * Both calls previously carried `.catch(() => {})`, which meant the outer
+   * try/catch could never fire: a delete that failed on the server still
+   * reported "deleted" and the row came back on the next refresh. Failures are
+   * propagated now — the two stores are still deleted in parallel, but
+   * `allSettled` lets us fail only when BOTH legs fail, so a voice missing from
+   * one store (already half-deleted) still resolves cleanly.
+   */
+  const removeVoice = async (id: string): Promise<void> => {
     const voiceName = voices.find((v) => v.voice_id === id)?.name;
+    const results = await Promise.allSettled([deleteVoiceFull(id, voiceName), deleteVoice(id)]);
+    if (results.every((r) => r.status === "rejected")) {
+      throw (results[0] as PromiseRejectedResult).reason;
+    }
+  };
+
+  const reportDeleteError = (err: unknown, fallback: string) => {
+    const quota = (err as { quota?: unknown })?.quota;
+    if (quota) notify.quotaExceeded(quota as Parameters<typeof notify.quotaExceeded>[0]);
+    else notify.error("Delete failed", err instanceof Error ? err.message : fallback);
+  };
+
+  const markRemoved = (id: string) => {
+    setRemovedIds((prev) => new Set(prev).add(id));
+    setSelected((prev) => {
+      const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+  };
+
+  const runDeleteOne = async (id: string, label: string) => {
+    if (deletingId === id) return;
+    setDeletingId(id);
+    releaseLocalState(id);
     try {
-      await Promise.all([
-        deleteVoiceFull(id, voiceName).catch(() => {}),
-        deleteVoice(id).catch(() => {}),
-      ]);
+      await removeVoice(id);
+      // Drop the row immediately. Waiting on refresh() left the deleted voice
+      // on screen for a full round-trip, which reads as "nothing happened".
+      markRemoved(id);
       notify.success(`Voice "${label}" deleted`);
       refresh();
     } catch (err) {
-      const quota = (err as { quota?: unknown })?.quota;
-      if (quota) notify.quotaExceeded(quota as Parameters<typeof notify.quotaExceeded>[0]);
-      else notify.error("Delete failed", err instanceof Error ? err.message : "Could not remove voice.");
+      reportDeleteError(err, "Could not remove voice.");
     } finally {
       setDeletingId(null);
     }
   };
 
-  const shownVoices = voices.filter((v) => !langFilter || v.language === langFilter);
+  /** Bulk path — used by both "Delete selected" and "Delete all". */
+  const runDeleteMany = async (ids: string[], what: string) => {
+    if (!ids.length || bulkBusy) return;
+    setBulkBusy(true);
+    const failed: string[] = [];
+    // Sequential, not parallel: these hit two delete endpoints each, and firing
+    // a whole library at once is what makes the backend rate-limit and return
+    // partial failures that look random to the user.
+    for (const id of ids) {
+      releaseLocalState(id);
+      try {
+        await removeVoice(id);
+        markRemoved(id);
+      } catch {
+        failed.push(voices.find((v) => v.voice_id === id)?.name || id);
+      }
+    }
+    setSelected(new Set());
+    setBulkBusy(false);
+
+    const done = ids.length - failed.length;
+    if (failed.length === 0) notify.success(`${done} ${what} deleted`);
+    else if (done === 0) notify.error("Delete failed", `Could not remove ${failed.length} ${what}.`);
+    else notify.error(`${done} deleted, ${failed.length} failed`, `Could not remove: ${failed.join(", ")}`);
+    refresh();
+  };
+
+  const toggleSelected = (id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  /** Every destructive action routes through the same in-UI confirm strip. */
+  const confirmDelete = () => {
+    const pending = confirming;
+    setConfirming(null);
+    if (!pending) return;
+    if (pending.kind === "one") void runDeleteOne(pending.id, pending.label);
+    else void runDeleteMany(pending.ids, pending.label);
+  };
+
+  const shownVoices = voices.filter(
+    (v) => !removedIds.has(v.voice_id) && (!langFilter || v.language === langFilter),
+  );
+  const selectedShown = shownVoices.filter((v) => selected.has(v.voice_id));
+  const allShownSelected = shownVoices.length > 0 && selectedShown.length === shownVoices.length;
 
   return (
     <div className="vm-card">
@@ -173,6 +268,64 @@ export default function VoiceLibrary() {
         </div>
       )}
 
+      {/* Destructive actions confirm in place rather than in a native dialog —
+          window.confirm is not used anywhere in this codebase. */}
+      {confirming && (
+        <div className="vm-vl-confirm" role="alertdialog" aria-live="assertive">
+          <span>
+            Delete {confirming.kind === "one" ? `“${confirming.label}”` : `${confirming.ids.length} ${confirming.label}`}?
+            This cannot be undone.
+          </span>
+          <div className="vm-vl-confirm-actions">
+            <button type="button" onClick={() => setConfirming(null)} className="vm-vl-btn">
+              Cancel
+            </button>
+            <button type="button" onClick={confirmDelete} className="vm-vl-btn vm-vl-btn--danger">
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+
+      {!isLoading && shownVoices.length > 0 && (
+        <div className="vm-vl-bulk">
+          <label className="vm-vl-check">
+            <input
+              type="checkbox"
+              checked={allShownSelected}
+              onChange={() =>
+                setSelected(allShownSelected ? new Set() : new Set(shownVoices.map((v) => v.voice_id)))
+              }
+              aria-label={allShownSelected ? "Clear selection" : "Select all voices"}
+            />
+            <span>{selectedShown.length > 0 ? `${selectedShown.length} selected` : "Select all"}</span>
+          </label>
+          <div className="vm-vl-bulk-actions">
+            {bulkBusy && <div className="vm-spinner" style={{ width: 13, height: 13 }} />}
+            <button
+              type="button"
+              className="vm-vl-btn"
+              disabled={bulkBusy || selectedShown.length === 0}
+              onClick={() =>
+                setConfirming({ kind: "many", ids: selectedShown.map((v) => v.voice_id), label: "voices" })
+              }
+            >
+              Delete selected
+            </button>
+            <button
+              type="button"
+              className="vm-vl-btn vm-vl-btn--danger"
+              disabled={bulkBusy}
+              onClick={() =>
+                setConfirming({ kind: "many", ids: shownVoices.map((v) => v.voice_id), label: "voices" })
+              }
+            >
+              Delete all
+            </button>
+          </div>
+        </div>
+      )}
+
       <div className="vm-voice-list">
         {isLoading && (
           <div style={{ textAlign: "center", padding: 20 }}>
@@ -202,6 +355,13 @@ export default function VoiceLibrary() {
           const isDefault = defaultVoiceId === v.voice_id;
           return (
             <div key={v.voice_id} className="vm-voice-item" style={{ flexDirection: "row", alignItems: "center", gap: 8 }}>
+              <input
+                type="checkbox"
+                className="vm-vl-row-check"
+                checked={selected.has(v.voice_id)}
+                onChange={() => toggleSelected(v.voice_id)}
+                aria-label={`Select ${v.name || v.voice_id}`}
+              />
               <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 5 }}>
                 <div className="vm-voice-name" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                   <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
@@ -251,8 +411,10 @@ export default function VoiceLibrary() {
                 </button>
                 <button
                   className="vm-voice-delete"
-                  onClick={() => handleDelete(v.voice_id)}
-                  disabled={deletingId === v.voice_id}
+                  onClick={() =>
+                    setConfirming({ kind: "one", id: v.voice_id, label: v.name || v.voice_id })
+                  }
+                  disabled={deletingId === v.voice_id || bulkBusy}
                   aria-label="Delete voice"
                   title="Delete voice"
                 >
@@ -284,6 +446,34 @@ export default function VoiceLibrary() {
           font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 3px; flex-shrink: 0;
           background: rgba(109,159,55,0.18); border: 1px solid rgba(109,159,55,0.4); color: var(--bamboo-400);
         }
+        /* ── bulk selection + in-place confirm ─────────────────────────── */
+        .vm-vl-bulk {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 10px; flex-wrap: wrap;
+          padding: 8px 2px 10px;
+        }
+        .vm-vl-check { display: inline-flex; align-items: center; gap: 7px; font-size: 12.5px; cursor: pointer; }
+        .vm-vl-bulk-actions { display: flex; align-items: center; gap: 6px; }
+        .vm-vl-row-check { flex-shrink: 0; cursor: pointer; }
+        .vm-vl-btn {
+          height: 32px; padding: 0 12px; border-radius: 7px; font-size: 13px;
+          border: 1px solid var(--border-subtle); background: var(--surface);
+          color: var(--text-primary); cursor: pointer;
+          transition: border-color 0.15s ease, color 0.15s ease;
+        }
+        .vm-vl-btn:hover:not(:disabled) { border-color: var(--border-strong, var(--border)); }
+        .vm-vl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+        .vm-vl-btn--danger { color: #c0392b; border-color: #c0392b55; }
+        .vm-vl-confirm {
+          display: flex; align-items: center; justify-content: space-between;
+          gap: 12px; flex-wrap: wrap;
+          padding: 10px 12px; margin-bottom: 10px;
+          border: 1px solid #c0392b55; border-radius: 9px;
+          background: var(--surface-hover, rgba(192, 57, 43, 0.05));
+          font-size: 13px; color: var(--text-primary);
+        }
+        .vm-vl-confirm-actions { display: flex; gap: 6px; }
+
         .vm-vl-empty {
           display: flex; flex-direction: column; align-items: center; text-align: center;
           padding: 28px 20px; gap: 8px;
