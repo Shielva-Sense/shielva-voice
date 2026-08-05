@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { LogIn, LogOut, User, Sun, Moon, Cloud, HardDrive, SlidersHorizontal } from "lucide-react";
 import Image from "next/image";
 import SessionTimer from "./components/SessionTimer";
+import Showcase from "./components/Showcase";
 import SpeechToText from "./components/SpeechToText";
 import TextToSpeech from "./components/TextToSpeech";
 import VoiceLibrary from "./components/VoiceLibrary";
@@ -12,7 +13,6 @@ import IntentClassifier from "./components/IntentClassifier";
 import RealTimeVoice from "./components/RealTimeVoice";
 import AnalyticsWidget from "./components/AnalyticsWidget";
 import VoiceTraining from "./components/VoiceTraining";
-import VoiceCloneLockedCard from "./components/VoiceCloneLockedCard";
 import { useAuth } from "./context/AuthContext";
 import { useStorage } from "./context/StorageContext";
 import SyncWidget from "./components/SyncWidget";
@@ -74,9 +74,17 @@ export default function Home() {
         </div>
 
         <nav className="vm-nav" aria-label="Primary">
-          <a href="#capabilities">Capabilities</a>
-          <a href="#how">How it works</a>
-          {isAuthenticated && <a href="/settings">Settings</a>}
+          {/* Marketing anchors are for visitors; once signed in the nav is
+              workspace navigation, not a pitch. */}
+          {!isAuthenticated ? (
+            <>
+              <a href="/docs">Docs</a>
+              <a href="#how">How it works</a>
+              <a href="#showcase">Showcase</a>
+            </>
+          ) : (
+            <a href="/settings">Settings</a>
+          )}
         </nav>
 
         <div className="vm-header-right">
@@ -169,7 +177,11 @@ export default function Home() {
         )}
       </section>
 
-      {/* ─── Capabilities (marketing) ─── */}
+      {/* ─── Marketing — anonymous visitors only ─── */}
+      {!isAuthenticated && !isLoading && (
+      <>
+      <Showcase />
+
       <section id="capabilities" className="vm-marketing">
         <h2>Everything a voice product needs, in one platform</h2>
         <p className="vm-marketing-sub">
@@ -200,26 +212,26 @@ export default function Home() {
           ))}
         </ol>
       </section>
+      </>
+      )}
 
       {/* ─── Feature Grid ─── */}
-      <div className="vm-grid">
-        {isAuthenticated && <AnalyticsWidget />}
-        <SpeechToText />
-        <TextToSpeech />
-        {/* Voice cloning is account-tied: library + enrollment for signed-in users,
-            a compact locked card for anonymous visitors. */}
-        {isAuthenticated ? (
-          <>
-            <VoiceLibrary />
-            <VoiceTraining />
-          </>
-        ) : (
-          <VoiceCloneLockedCard />
-        )}
-        <Translator />
-        {isAuthenticated && <IntentClassifier />}
-        {isAuthenticated && <RealTimeVoice />}
-      </div>
+      {/* Tools are for signed-in users only — an anonymous visitor gets the
+          marketing page and nothing operable. Previously STT, TTS and
+          Translation ran pre-login, which handed out real compute to anyone
+          who loaded the page. */}
+      {isAuthenticated && (
+        <div className="vm-grid">
+          <AnalyticsWidget />
+          <SpeechToText />
+          <TextToSpeech />
+          <VoiceLibrary />
+          <VoiceTraining />
+          <Translator />
+          <IntentClassifier />
+          <RealTimeVoice />
+        </div>
+      )}
 
       {/* ─── Footer ─── */}
       <footer className="vm-footer">
@@ -236,7 +248,7 @@ export default function Home() {
           margin-right: auto;
         }
         .vm-nav a {
-          color: var(--text-muted, #888);
+          color: var(--text-secondary);
           font-size: 13px;
           text-decoration: none;
           /* Reserve the underline's space up front so hover doesn't shift the row. */
@@ -246,7 +258,10 @@ export default function Home() {
         }
         .vm-nav a:hover,
         .vm-nav a:focus-visible {
-          color: var(--text, #eaeaea);
+          /* --text-primary is defined for BOTH themes. The previous
+             var(--text, #eaeaea) had no such token, so the near-white fallback
+             always applied and the label disappeared on the light theme. */
+          color: var(--text-primary);
           border-bottom-color: currentColor;
         }
         @media (max-width: 860px) {
@@ -268,7 +283,7 @@ export default function Home() {
         }
         .vm-marketing-sub {
           margin: 8px 0 0;
-          color: var(--text-muted, #888);
+          color: var(--text-secondary);
           font-size: 15px;
           max-width: 62ch;
         }
@@ -300,7 +315,7 @@ export default function Home() {
           margin: 0;
           font-size: 13.5px;
           line-height: 1.62;
-          color: var(--text-muted, #888);
+          color: var(--text-secondary);
         }
 
         .vm-steps {
@@ -338,7 +353,7 @@ export default function Home() {
           margin: 0;
           font-size: 13.5px;
           line-height: 1.62;
-          color: var(--text-muted, #888);
+          color: var(--text-secondary);
         }
 
         @media (prefers-reduced-motion: reduce) {
@@ -348,7 +363,7 @@ export default function Home() {
           display: flex;
           align-items: center;
           gap: 6px;
-          color: var(--text-muted, #888);
+          color: var(--text-secondary);
           font-size: 13px;
         }
         .vm-auth-name {
@@ -363,7 +378,7 @@ export default function Home() {
           gap: 5px;
           background: transparent;
           border: 1px solid var(--border, #1a1a1a);
-          color: var(--text-muted, #888);
+          color: var(--text-secondary);
           border-radius: 6px;
           padding: 4px 10px;
           font-size: 12px;
@@ -383,7 +398,7 @@ export default function Home() {
         }
         .vm-hero-trial-note {
           font-size: 13px;
-          color: var(--text-muted, #888);
+          color: var(--text-secondary);
           margin-top: 8px;
         }
         .vm-hero-signin-link {
