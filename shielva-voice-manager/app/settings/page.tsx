@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
-import { ArrowLeft, Check, KeyRound, Loader2, Trash2, TriangleAlert } from "lucide-react";
+import { ArrowLeft, Check, KeyRound, Mic, Trash2, TriangleAlert, Volume2 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -20,29 +20,31 @@ import {
 } from "../lib/voice-settings";
 
 /**
- * Engine settings — pick what drives speech-to-text and text-to-speech.
+ * Engine settings — choose what drives speech-to-text and text-to-speech.
  *
- * The server decides what is selectable (live health + subscription probe per
- * engine) and this page renders that decision rather than re-deriving it. An
- * engine that is unreachable, unconfigured, or out of quota arrives with
- * selectable=false and a reason, and is rendered disabled with the reason
- * visible — the whole point is that nobody picks an engine that will fail on
- * first use.
+ * Built on the app's own `vm-*` design system (globals.css), NOT Tailwind
+ * utilities. The rest of this app uses vm-card / vm-engine-toggle / vm-btn and
+ * the --surface/--border/--text-* tokens; a page written in raw utilities reads
+ * as a different product bolted on, which is exactly how the first version of
+ * this screen looked.
+ *
+ * The engine picker deliberately reuses `.vm-engine-toggle` — the same control
+ * the Text-to-Speech card already uses — so switching provider feels identical
+ * to switching anything else here.
  */
 
 type Status = "loading" | "ready" | "error";
 
 export default function SettingsPage() {
   const [status, setStatus] = useState<Status>("loading");
-  const [error, setError] = useState<string>("");
+  const [error, setError] = useState("");
   const [catalog, setCatalog] = useState<EngineCatalog | null>(null);
   const [settings, setSettings] = useState<VoiceSettings | null>(null);
-  const [saving, setSaving] = useState<string>("");
+  const [saving, setSaving] = useState("");
 
   const load = useCallback(async () => {
     setStatus("loading");
     try {
-      // One round trip each, in parallel — the catalog probe is the slow one.
       const [c, s] = await Promise.all([listEngines(), getSettings()]);
       setCatalog(c);
       setSettings(s);
@@ -62,7 +64,7 @@ export default function SettingsPage() {
     try {
       const next = await saveEngines(kind === "tts" ? { tts_provider: id } : { stt_provider: id });
       setSettings(next);
-      toast.success(`${kind === "tts" ? "Text-to-speech" : "Speech-to-text"} set to ${engineLabel(id)}`);
+      toast.success(`${kind === "tts" ? "Text to speech" : "Speech to text"} → ${engineLabel(id)}`);
     } catch (e) {
       toast.error("Could not save", { description: e instanceof Error ? e.message : String(e) });
     } finally {
@@ -70,115 +72,232 @@ export default function SettingsPage() {
     }
   };
 
-  if (status === "loading") {
-    return (
-      <main className="mx-auto flex min-h-[70vh] max-w-4xl flex-col items-center justify-center px-6">
-        <Loader2 size={28} className="animate-spin text-neutral-400" aria-hidden="true" />
-        <p className="mt-4 text-[15px] font-medium">Checking engine availability</p>
-        <p className="mt-1 text-[13px] text-neutral-500">
-          Each engine is probed live, so you only see what you can actually use.
+  return (
+    <div className="vm-settings-root">
+      <header className="vm-settings-top">
+        <Link href="/" className="vm-settings-back">
+          <ArrowLeft size={14} strokeWidth={2} /> Back
+        </Link>
+        <h1>Engine settings</h1>
+        <p>
+          Choose what powers transcription and speech. Every engine is checked live — anything
+          unreachable, unconfigured or out of quota can&apos;t be selected.
         </p>
-      </main>
-    );
-  }
+      </header>
 
-  if (status === "error" || !catalog || !settings) {
-    return (
-      <main className="mx-auto flex min-h-[70vh] max-w-xl items-center px-6">
-        <div className="w-full rounded-lg border border-red-200 bg-red-50 p-4 dark:border-red-900 dark:bg-red-950/40">
-          <p className="font-medium text-red-800 dark:text-red-300">Could not load engine settings</p>
-          <p className="mt-1 text-sm text-red-700 dark:text-red-400">{error}</p>
-          <button
-            onClick={() => void load()}
-            className="mt-3 rounded-md border border-red-300 px-3 py-1.5 text-sm text-red-800 hover:bg-red-100 dark:border-red-800 dark:text-red-300"
-          >
-            Retry
+      {status === "loading" && (
+        <div className="vm-settings-state" role="status" aria-live="polite">
+          <span className="vm-settings-spinner" aria-hidden="true" />
+          <p className="vm-settings-state-title">Checking engine availability</p>
+          <p className="vm-settings-state-sub">Probing each provider so you only see what works.</p>
+        </div>
+      )}
+
+      {status === "error" && (
+        <div className="vm-settings-state">
+          <TriangleAlert size={26} strokeWidth={1.8} className="vm-settings-err-icon" aria-hidden="true" />
+          <p className="vm-settings-state-title">Could not load engine settings</p>
+          <p className="vm-settings-state-sub">{error}</p>
+          <button type="button" className="vm-btn vm-btn-primary vm-btn-sm" onClick={() => void load()}>
+            Try again
           </button>
         </div>
-      </main>
-    );
-  }
+      )}
 
-  return (
-    <main className="mx-auto max-w-4xl px-6 py-10">
-      <Link
-        href="/"
-        className="mb-6 inline-flex items-center gap-1.5 text-sm text-neutral-500 hover:text-neutral-800 dark:hover:text-neutral-200"
-      >
-        <ArrowLeft size={14} /> Back
-      </Link>
+      {status === "ready" && catalog && settings && (
+        <div className="vm-settings-grid">
+          <EngineCard
+            icon={<Volume2 size={16} strokeWidth={2} />}
+            title="Text to speech"
+            subtitle="Generates spoken audio, including cloned voices"
+            rows={catalog.tts}
+            active={settings.tts_provider ?? catalog.active.tts}
+            kind="tts"
+            saving={saving}
+            byok={settings.byok_configured}
+            onChoose={choose}
+            onKeyChanged={setSettings}
+            showVoices
+          />
+          <EngineCard
+            icon={<Mic size={16} strokeWidth={2} />}
+            title="Speech to text"
+            subtitle="Transcribes microphone and uploaded audio"
+            rows={catalog.stt}
+            active={settings.stt_provider ?? catalog.active.stt}
+            kind="stt"
+            saving={saving}
+            byok={settings.byok_configured}
+            onChoose={choose}
+            onKeyChanged={setSettings}
+          />
+        </div>
+      )}
 
-      <h1 className="text-2xl font-semibold tracking-tight">Engine settings</h1>
-      <p className="mt-1 text-sm text-neutral-500">
-        Choose what powers transcription and speech. Availability is checked live — engines that
-        are unreachable, unconfigured, or out of quota cannot be selected.
-      </p>
+      <style>{`
+        .vm-settings-root { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; }
+        .vm-settings-top { margin-bottom: 22px; }
+        .vm-settings-back {
+          display: inline-flex; align-items: center; gap: 5px;
+          font-size: 13px; color: var(--text-secondary); text-decoration: none;
+          margin-bottom: 14px;
+        }
+        .vm-settings-back:hover { color: var(--text-primary); }
+        .vm-settings-top h1 {
+          margin: 0; font-size: clamp(20px, 2.6vw, 26px); font-weight: 650;
+          letter-spacing: -0.02em; color: var(--text-primary);
+        }
+        .vm-settings-top p {
+          margin: 6px 0 0; font-size: 13.5px; line-height: 1.6;
+          color: var(--text-secondary); max-width: 62ch;
+        }
 
-      <EngineSection
-        title="Text to speech"
-        blurb="Generates the spoken audio, including cloned voices."
-        rows={catalog.tts}
-        active={settings.tts_provider ?? catalog.active.tts}
-        saving={saving}
-        kind="tts"
-        byok={settings.byok_configured}
-        onChoose={choose}
-        onKeyChanged={setSettings}
-        showVoices
-      />
+        /* Two columns on desktop, stacked on tablet down — the cards are dense
+           enough that side-by-side stops helping below ~900px. */
+        .vm-settings-grid {
+          display: grid; gap: 16px;
+          grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
+          align-items: start;
+        }
+        @media (max-width: 900px) {
+          .vm-settings-grid { grid-template-columns: 1fr; }
+          .vm-settings-root { padding: 20px 14px 48px; }
+        }
 
-      <EngineSection
-        title="Speech to text"
-        blurb="Transcribes microphone and uploaded audio."
-        rows={catalog.stt}
-        active={settings.stt_provider ?? catalog.active.stt}
-        saving={saving}
-        kind="stt"
-        byok={settings.byok_configured}
-        onChoose={choose}
-        onKeyChanged={setSettings}
-      />
-    </main>
+        /* ── centred loading / error, vertically settled not pinned to top ── */
+        .vm-settings-state {
+          display: flex; flex-direction: column; align-items: center; justify-content: center;
+          gap: 6px; min-height: 46vh; text-align: center;
+        }
+        .vm-settings-state-title {
+          margin: 10px 0 0; font-size: 15px; font-weight: 600; color: var(--text-primary);
+        }
+        .vm-settings-state-sub {
+          margin: 0; font-size: 13px; color: var(--text-secondary); max-width: 44ch;
+        }
+        .vm-settings-state .vm-btn { margin-top: 16px; }
+        .vm-settings-err-icon { color: var(--text-muted); }
+        .vm-settings-spinner {
+          width: 26px; height: 26px; border-radius: 50%;
+          border: 2px solid var(--border); border-top-color: var(--accent);
+          animation: vm-spin 0.75s linear infinite;
+        }
+        @keyframes vm-spin { to { transform: rotate(360deg); } }
+        @media (prefers-reduced-motion: reduce) {
+          .vm-settings-spinner { animation-duration: 2.4s; }
+        }
+
+        /* ── engine rows ─────────────────────────────────────────────────── */
+        .vm-eng-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 8px; }
+        .vm-eng {
+          border: 1px solid var(--border-subtle); border-radius: 10px;
+          padding: 12px 13px; background: var(--surface);
+          transition: border-color 0.15s ease, background 0.15s ease;
+        }
+        .vm-eng[data-active="true"] {
+          border-color: var(--accent-border, var(--accent));
+          background: var(--accent-bg, var(--surface-hover));
+        }
+        .vm-eng[data-selectable="false"] { opacity: 0.55; }
+        .vm-eng-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+        .vm-eng-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
+        .vm-eng-pill {
+          display: inline-flex; align-items: center; gap: 4px;
+          font-size: 11.5px; padding: 2px 7px; border-radius: 999px;
+          border: 1px solid var(--border-subtle); color: var(--text-secondary);
+        }
+        .vm-eng-pill[data-tone="ok"] { color: var(--accent); border-color: var(--accent); }
+        .vm-eng-pill[data-tone="bad"] { color: #c0392b; border-color: #c0392b55; }
+        .vm-eng-detail {
+          margin: 7px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary);
+        }
+        .vm-eng-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+        .vm-eng-link {
+          background: none; border: 0; cursor: pointer; padding: 0;
+          font-size: 12.5px; color: var(--text-secondary); text-decoration: underline;
+          text-underline-offset: 2px;
+        }
+        .vm-eng-link:hover { color: var(--text-primary); }
+        .vm-quota { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+
+        /* ── BYOK ────────────────────────────────────────────────────────── */
+        .vm-byok { margin-top: 11px; padding-top: 11px; border-top: 1px dashed var(--border-subtle); }
+        .vm-byok-row { display: flex; gap: 7px; flex-wrap: wrap; margin-top: 7px; }
+        .vm-byok-row .vm-input { flex: 1 1 220px; min-width: 0; }
+        .vm-byok-note { margin: 0; font-size: 12px; color: var(--text-muted); line-height: 1.5; }
+
+        /* ── voice picker ────────────────────────────────────────────────── */
+        .vm-voices { margin-top: 11px; padding-top: 11px; border-top: 1px dashed var(--border-subtle); }
+        .vm-voice-filters { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+        .vm-voice-chip {
+          border: 1px solid var(--border-subtle); background: none; cursor: pointer;
+          border-radius: 999px; padding: 3px 10px; font-size: 12px; text-transform: capitalize;
+          color: var(--text-secondary);
+        }
+        .vm-voice-chip[aria-pressed="true"] {
+          background: var(--text-primary); border-color: var(--text-primary);
+          color: var(--surface);
+        }
+        .vm-voice-grid {
+          list-style: none; margin: 9px 0 0; padding: 0; display: grid; gap: 6px;
+          grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+          max-height: 210px; overflow-y: auto;
+        }
+        .vm-voice {
+          border: 1px solid var(--border-subtle); border-radius: 8px;
+          padding: 7px 9px; font-size: 12.5px; color: var(--text-primary);
+          display: flex; justify-content: space-between; gap: 6px; align-items: baseline;
+        }
+        .vm-voice span { color: var(--text-muted); font-size: 11.5px; }
+      `}</style>
+    </div>
   );
 }
 
-function EngineSection({
+function EngineCard({
+  icon,
   title,
-  blurb,
+  subtitle,
   rows,
   active,
-  saving,
   kind,
+  saving,
   byok,
   onChoose,
   onKeyChanged,
   showVoices = false,
 }: {
+  icon: React.ReactNode;
   title: string;
-  blurb: string;
+  subtitle: string;
   rows: EngineRow[];
   active: string;
-  saving: string;
   kind: "tts" | "stt";
+  saving: string;
   byok: string[];
   onChoose: (kind: "tts" | "stt", id: string) => Promise<void>;
   onKeyChanged: (s: VoiceSettings) => void;
   showVoices?: boolean;
 }) {
   return (
-    <section className="mt-10">
-      <h2 className="text-lg font-medium">{title}</h2>
-      <p className="mt-0.5 text-sm text-neutral-500">{blurb}</p>
+    <section className="vm-card">
+      <div className="vm-card-header">
+        <div className="vm-card-icon">{icon}</div>
+        <div>
+          <div className="vm-card-title">{title}</div>
+          <div className="vm-card-subtitle">{subtitle}</div>
+        </div>
+      </div>
 
-      <ul role="list" className="mt-4 flex flex-col gap-3">
-        {rows.map((row) => (
-          <EngineCard
-            key={row.id}
-            row={row}
+      <ul role="list" className="vm-eng-list">
+        {rows.map((r) => (
+          <EngineRowItem
+            key={r.id}
+            row={r}
             kind={kind}
-            isActive={row.id === active}
-            isSaving={saving === `${kind}:${row.id}`}
-            hasOwnKey={byok.includes(row.id)}
+            isActive={r.id === active}
+            isSaving={saving === `${kind}:${r.id}`}
+            hasOwnKey={byok.includes(r.id)}
             onChoose={onChoose}
             onKeyChanged={onKeyChanged}
             showVoices={showVoices}
@@ -189,7 +308,7 @@ function EngineSection({
   );
 }
 
-function EngineCard({
+function EngineRowItem({
   row,
   kind,
   isActive,
@@ -208,85 +327,72 @@ function EngineCard({
   onKeyChanged: (s: VoiceSettings) => void;
   showVoices: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  const [panel, setPanel] = useState<"" | "key" | "voices">("");
 
   return (
-    <li
-      className={[
-        "rounded-lg border p-4 transition-colors",
-        isActive
-          ? "border-green-500 bg-green-50/60 dark:border-green-700 dark:bg-green-950/30"
-          : "border-neutral-200 dark:border-neutral-800",
-        row.selectable ? "" : "opacity-60",
-      ].join(" ")}
-    >
-      <div className="flex flex-wrap items-center gap-3">
-        <button
-          type="button"
-          disabled={!row.selectable || isActive || isSaving}
-          onClick={() => void onChoose(kind, row.id)}
-          className="rounded-md border border-neutral-300 px-3 py-1.5 text-[13px] font-medium enabled:hover:bg-neutral-100 disabled:cursor-not-allowed dark:border-neutral-700 dark:enabled:hover:bg-neutral-800"
-        >
-          {isSaving ? "Saving…" : isActive ? "In use" : "Use this"}
-        </button>
+    <li className="vm-eng" data-active={isActive} data-selectable={row.selectable}>
+      <div className="vm-eng-head">
+        <span className="vm-eng-name">{engineLabel(row.id)}</span>
 
-        <span className="font-medium">{engineLabel(row.id)}</span>
-
-        <StatusPill row={row} />
+        {row.healthy === true && (
+          <span className="vm-eng-pill" data-tone="ok">
+            <Check size={11} aria-hidden="true" /> Available
+          </span>
+        )}
+        {row.healthy === false && (
+          <span className="vm-eng-pill" data-tone="bad">
+            <TriangleAlert size={11} aria-hidden="true" /> Unavailable
+          </span>
+        )}
+        {row.healthy === null && <span className="vm-eng-pill">Not checked</span>}
 
         {hasOwnKey && (
-          <span className="inline-flex items-center gap-1 rounded-full border border-neutral-300 px-2 py-0.5 text-[11px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-400">
+          <span className="vm-eng-pill">
             <KeyRound size={11} aria-hidden="true" /> Your key
           </span>
         )}
-
         {typeof row.quota_left === "number" && (
-          <span className="text-[12px] tabular-nums text-neutral-500">
-            {row.quota_left.toLocaleString()} left
-          </span>
+          <span className="vm-quota">{row.quota_left.toLocaleString()} left</span>
         )}
 
-        <button
-          type="button"
-          onClick={() => setExpanded((v) => !v)}
-          className="ml-auto text-[13px] text-neutral-500 underline-offset-2 hover:underline"
-        >
-          {expanded ? "Hide" : "API key"}
-        </button>
+        <div className="vm-eng-actions">
+          <button
+            type="button"
+            className="vm-eng-link"
+            onClick={() => setPanel(panel === "key" ? "" : "key")}
+          >
+            {hasOwnKey ? "Key" : "Add key"}
+          </button>
+          {showVoices && row.selectable && (
+            <button
+              type="button"
+              className="vm-eng-link"
+              onClick={() => setPanel(panel === "voices" ? "" : "voices")}
+            >
+              Voices
+            </button>
+          )}
+          <button
+            type="button"
+            className={isActive ? "vm-btn vm-btn-sm" : "vm-btn vm-btn-primary vm-btn-sm"}
+            disabled={!row.selectable || isActive || isSaving}
+            onClick={() => void onChoose(kind, row.id)}
+          >
+            {isSaving ? "Saving…" : isActive ? "In use" : "Use"}
+          </button>
+        </div>
       </div>
 
-      {/* The server's reason is the useful part — surface it verbatim rather
-          than replacing it with a generic "unavailable". */}
-      {row.detail && (
-        <p className="mt-2 text-[13px] leading-relaxed text-neutral-600 dark:text-neutral-400">{row.detail}</p>
-      )}
+      {/* The probe's own reason is the useful part — show it verbatim. */}
+      {row.detail && <p className="vm-eng-detail">{row.detail}</p>}
 
-      {expanded && <ByokEditor engine={row.id} hasOwnKey={hasOwnKey} onChanged={onKeyChanged} />}
-      {expanded && showVoices && row.selectable && <VoicePicker engine={row.id} />}
+      {panel === "key" && <Byok engine={row.id} hasOwnKey={hasOwnKey} onChanged={onKeyChanged} />}
+      {panel === "voices" && <Voices engine={row.id} />}
     </li>
   );
 }
 
-function StatusPill({ row }: { row: EngineRow }) {
-  if (row.healthy === true) {
-    return (
-      <span className="inline-flex items-center gap-1 text-[12px] text-green-700 dark:text-green-400">
-        <Check size={12} aria-hidden="true" /> Available
-      </span>
-    );
-  }
-  if (row.healthy === false) {
-    return (
-      <span className="inline-flex items-center gap-1 text-[12px] text-red-700 dark:text-red-400">
-        <TriangleAlert size={12} aria-hidden="true" /> Unavailable
-      </span>
-    );
-  }
-  // null — no probe exists. Say so; do not imply a check passed.
-  return <span className="text-[12px] text-neutral-500">Not checked</span>;
-}
-
-function ByokEditor({
+function Byok({
   engine,
   hasOwnKey,
   onChanged,
@@ -297,69 +403,54 @@ function ByokEditor({
 }) {
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
-  const inputId = `byok-${engine}`;
+  const id = `byok-${engine}`;
 
-  const save = async () => {
+  const run = async (fn: () => Promise<VoiceSettings>, ok: string) => {
     setBusy(true);
     try {
-      onChanged(await saveByokKey(engine, value.trim()));
+      onChanged(await fn());
       setValue("");
-      toast.success(`Key saved for ${engineLabel(engine)}`);
+      toast.success(ok);
     } catch (e) {
-      toast.error("Could not save key", { description: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const remove = async () => {
-    setBusy(true);
-    try {
-      onChanged(await deleteByokKey(engine));
-      toast.success(`Removed your key for ${engineLabel(engine)}`);
-    } catch (e) {
-      toast.error("Could not remove key", { description: e instanceof Error ? e.message : String(e) });
+      toast.error("Failed", { description: e instanceof Error ? e.message : String(e) });
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <div className="mt-4 rounded-md border border-neutral-200 p-3 dark:border-neutral-800">
-      <label htmlFor={inputId} className="block text-[13px] font-medium">
+    <div className="vm-byok">
+      <label className="vm-label" htmlFor={id}>
         Use your own {engineLabel(engine)} account
       </label>
-      <p className="mt-0.5 text-[12px] text-neutral-500">
-        Billed to your account instead of ours. Stored encrypted; it is never shown again after
-        saving.
-      </p>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
+      <p className="vm-byok-note">Billed to you. Encrypted at rest and never shown again.</p>
+      <div className="vm-byok-row">
         <input
-          id={inputId}
+          id={id}
           type="password"
           autoComplete="off"
+          className="vm-input"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder={hasOwnKey ? "A key is already saved — enter a new one to replace it" : "API key"}
-          className="min-w-[18rem] flex-1 rounded-md border border-neutral-300 px-2.5 py-1.5 text-[13px] dark:border-neutral-700 dark:bg-neutral-900"
+          placeholder={hasOwnKey ? "Enter a new key to replace the saved one" : "API key"}
         />
         <button
           type="button"
-          onClick={() => void save()}
+          className="vm-btn vm-btn-primary vm-btn-sm"
           disabled={busy || value.trim().length < 8}
-          className="rounded-md border border-neutral-300 px-3 py-1.5 text-[13px] enabled:hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:enabled:hover:bg-neutral-800"
+          onClick={() => void run(() => saveByokKey(engine, value.trim()), "Key saved")}
         >
           Save
         </button>
         {hasOwnKey && (
           <button
             type="button"
-            onClick={() => void remove()}
+            className="vm-btn vm-btn-sm"
             disabled={busy}
             aria-label={`Remove your ${engineLabel(engine)} key`}
-            className="inline-flex items-center gap-1 rounded-md border border-neutral-300 px-2.5 py-1.5 text-[13px] text-red-700 enabled:hover:bg-red-50 disabled:opacity-50 dark:border-neutral-700 dark:text-red-400"
+            onClick={() => void run(() => deleteByokKey(engine), "Key removed")}
           >
-            <Trash2 size={13} aria-hidden="true" /> Remove
+            <Trash2 size={13} aria-hidden="true" />
           </button>
         )}
       </div>
@@ -367,65 +458,54 @@ function ByokEditor({
   );
 }
 
-function VoicePicker({ engine }: { engine: string }) {
+function Voices({ engine }: { engine: string }) {
   const [voices, setVoices] = useState<PresetVoice[] | null>(null);
   const [err, setErr] = useState("");
-  const [gender, setGender] = useState<"all" | "male" | "female">("all");
+  const [g, setG] = useState<"all" | "male" | "female">("all");
 
   useEffect(() => {
-    let cancelled = false;
+    let dead = false;
     listEngineVoices(engine)
-      .then((r) => {
-        if (!cancelled) setVoices(r.voices);
-      })
-      .catch((e) => {
-        if (!cancelled) setErr(e instanceof Error ? e.message : String(e));
-      });
+      .then((r) => !dead && setVoices(r.voices))
+      .catch((e) => !dead && setErr(e instanceof Error ? e.message : String(e)));
     return () => {
-      cancelled = true;
+      dead = true;
     };
   }, [engine]);
 
-  if (err) return <p className="mt-3 text-[13px] text-red-700 dark:text-red-400">{err}</p>;
-  if (!voices) return <p className="mt-3 text-[13px] text-neutral-500">Loading voices…</p>;
+  if (err) return <p className="vm-eng-detail">{err}</p>;
+  if (!voices) return <p className="vm-eng-detail">Loading voices…</p>;
 
-  const shown = gender === "all" ? voices : voices.filter((v) => v.gender === gender);
+  const shown = g === "all" ? voices : voices.filter((v) => v.gender === g);
 
   return (
-    <div className="mt-4">
-      <div className="flex items-center gap-2">
-        <span className="text-[13px] font-medium">Sample voices</span>
-        {(["all", "male", "female"] as const).map((g) => (
+    <div className="vm-voices">
+      <div className="vm-voice-filters">
+        <span className="vm-label" style={{ marginRight: 2 }}>
+          Voices
+        </span>
+        {(["all", "male", "female"] as const).map((k) => (
           <button
-            key={g}
+            key={k}
             type="button"
-            onClick={() => setGender(g)}
-            aria-pressed={gender === g}
-            className={[
-              "rounded-full border px-2.5 py-0.5 text-[12px] capitalize",
-              gender === g
-                ? "border-neutral-800 bg-neutral-800 text-white dark:border-neutral-200 dark:bg-neutral-200 dark:text-neutral-900"
-                : "border-neutral-300 dark:border-neutral-700",
-            ].join(" ")}
+            className="vm-voice-chip"
+            aria-pressed={g === k}
+            onClick={() => setG(k)}
           >
-            {g}
+            {k}
           </button>
         ))}
+        <span className="vm-quota">{shown.length}</span>
       </div>
 
       {shown.length === 0 ? (
-        <p className="mt-2 text-[13px] text-neutral-500">
-          This engine publishes no {gender === "all" ? "" : `${gender} `}sample voices.
-        </p>
+        <p className="vm-eng-detail">No {g === "all" ? "" : `${g} `}voices published by this engine.</p>
       ) : (
-        <ul role="list" className="mt-2 grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+        <ul role="list" className="vm-voice-grid">
           {shown.map((v) => (
-            <li
-              key={v.voice_id}
-              className="rounded-md border border-neutral-200 px-2.5 py-1.5 text-[13px] dark:border-neutral-800"
-            >
-              <span className="font-medium">{v.name}</span>
-              {v.gender && <span className="ml-1.5 text-[12px] text-neutral-500">{v.gender}</span>}
+            <li key={v.voice_id} className="vm-voice">
+              {v.name}
+              {v.gender && <span>{v.gender}</span>}
             </li>
           ))}
         </ul>
