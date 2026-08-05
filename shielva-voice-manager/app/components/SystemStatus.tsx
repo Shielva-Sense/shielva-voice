@@ -16,7 +16,6 @@ const SERVICE_META: Record<string, { port: number; model: string }> = {
   "shielva-tts": { port: 8203, model: "Voice synthesis router" },
   translator: { port: 8205, model: "Qwen 7B (translate + cleanup)" },
   chatterbox: { port: 8209, model: "30 languages · voice cloning" },
-  orpheus: { port: 8208, model: "streaming · English (~350ms)" },
 };
 
 const SERVICE_COUNT = Object.keys(SERVICE_META).length;

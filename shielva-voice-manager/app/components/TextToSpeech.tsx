@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef } from "react";
 import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
-import { synthesizeSpeech, translate, getLanguages, recordUsage, CHATTERBOX_TTS_LANGS, ORPHEUS_TTS_LANGS, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
+import { synthesizeSpeech, translate, getLanguages, recordUsage, CHATTERBOX_TTS_LANGS, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
@@ -155,10 +155,6 @@ const TTS_STAGES = [
 ];
 
 // Selectable TTS engines shown in the Voice engine picker.
-const ENGINE_OPTIONS: { id: TtsEngine; name: string; hint: string }[] = [
-  { id: "chatterbox", name: "Chatterbox", hint: "Voice cloning · 30 languages" },
-  { id: "orpheus", name: "Orpheus", hint: "Fast English streaming" },
-];
 
 const TRANSLATE_STAGE = { label: "Translating text...", percent: 8 };
 
@@ -179,11 +175,7 @@ export default function TextToSpeech() {
   const [outputLang, setOutputLang] = useState("en");
   const [engine, setEngine] = useState<TranslateEngine>("qwen");
   // TTS engine follows the OUTPUT LANGUAGE:
-  //   • English → Orpheus (fast streaming, DEFAULT) OR Chatterbox — user picks.
-  //   • any other language (Indian + international) → Chatterbox only (Orpheus is English-only).
-  // Voice cloning is a Chatterbox capability; Orpheus uses a fixed preset voice (no voice pick).
-  const [ttsEngine, setTtsEngine] = useState<TtsEngine>("orpheus");
-  const orpheusAvailable = ORPHEUS_TTS_LANGS.includes(outputLang);   // i.e. English
+        const [ttsEngine] = useState<TtsEngine>("chatterbox");
   const canSelectVoice = ttsEngine === "chatterbox";                 // clone only on Chatterbox
   const [availableLangs, setAvailableLangs] = useState<string[]>(Object.keys(LANGUAGES));
   const [translatedText, setTranslatedText] = useState<string | null>(null);
@@ -253,10 +245,8 @@ export default function TextToSpeech() {
     voices.find((v) => v.voice_id === voiceId)?.name || "Default Chatterbox voice";
 
   // The output language drives the engine, not the other way around. English is the only
-  // language Orpheus speaks, so English defaults to Orpheus (Chatterbox stays selectable);
-  // every other language is Chatterbox-only, so we snap the engine to Chatterbox.
+    // every other language is Chatterbox-only, so we snap the engine to Chatterbox.
   useEffect(() => {
-    setTtsEngine(orpheusAvailable ? "orpheus" : "chatterbox");
      
   }, [outputLang]);
 
@@ -315,13 +305,10 @@ export default function TextToSpeech() {
       }
 
       // ── Synthesize. Chatterbox clones zero-shot (default reference or a Library voice);
-      //    Orpheus is a fixed-voice fast English engine, so it never carries a voiceId. ──
-      const cloning = canSelectVoice && Boolean(voiceId);
-      setStep(ttsEngine === "orpheus" ? "Streaming with Orpheus..." : "Synthesizing with Chatterbox...");
+            const cloning = canSelectVoice && Boolean(voiceId);
+      setStep("Synthesizing with Chatterbox...");
       proc.addLog(
-        ttsEngine === "orpheus"
-          ? "Streaming English with Orpheus (fast preset voice)..."
-          : cloning
+        cloning
             ? `Cloning "${selectedVoiceName}"...`
             : "Using default Chatterbox reference voice...",
       );
@@ -410,37 +397,6 @@ export default function TextToSpeech() {
       </div>
 
       {/* Language selectors — Input + Output */}
-      {/* TTS engine — user-selectable: Chatterbox (clone + 30 languages) or Orpheus (fast English) */}
-      <div style={{ marginBottom: 8 }}>
-        <div className="vm-label" style={{ marginBottom: 4 }}>Voice engine</div>
-        <div role="group" aria-label="TTS engine" style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-          {/* Orpheus only speaks English — for every other language Chatterbox is the sole engine. */}
-          {ENGINE_OPTIONS.filter((e) => e.id === "chatterbox" || orpheusAvailable).map((e) => {
-            const active = ttsEngine === e.id;
-            return (
-              <button
-                key={e.id}
-                type="button"
-                onClick={() => setTtsEngine(e.id)}
-                aria-pressed={active}
-                style={{
-                  display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 2,
-                  padding: "6px 12px", borderRadius: 8, cursor: "pointer", textAlign: "left",
-                  border: `1px solid ${active ? "var(--brand-500, #6d9f37)" : "var(--border-subtle)"}`,
-                  background: active ? "var(--brand-50, rgba(109,159,55,0.10))" : "var(--surface-subtle)",
-                  fontSize: 12,
-                }}
-              >
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600, color: "var(--text-primary)" }}>
-                  <span style={{ width: 7, height: 7, borderRadius: "50%", background: active ? "var(--brand-500, #6d9f37)" : "var(--border-strong, #ccc)" }} />
-                  {e.name}
-                </span>
-                <span style={{ color: "var(--text-muted)" }}>{e.hint}</span>
-              </button>
-            );
-          })}
-        </div>
-      </div>
 
       <div style={{ display: "flex", gap: 8, marginBottom: 8, alignItems: "flex-end" }}>
         {/* Input language — click to open picker modal */}
@@ -631,9 +587,7 @@ export default function TextToSpeech() {
         )}
       </div>
 
-      {/* Voice selector — Chatterbox only. Orpheus is a fixed-voice fast English engine and
-          cannot clone, so the picker is hidden whenever Orpheus is the active engine. */}
-      {canSelectVoice && (
+            {canSelectVoice && (
         <div style={{ marginTop: 12 }}>
           <div className="vm-label" style={{ marginBottom: 4 }}>Voice</div>
           <select

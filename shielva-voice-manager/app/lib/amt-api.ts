@@ -109,7 +109,6 @@ export const SERVICES = [
   { key: "shielva-tts", label: "Text-to-Speech" },
   { key: "translator", label: "Translation" },
   { key: "chatterbox", label: "Chatterbox + Indic LoRA" },
-  { key: "orpheus", label: "Orpheus (streaming)" },
 ] as const;
 
 interface AmtHealthResponse {
@@ -469,8 +468,7 @@ export interface RealtimeConfig {
   sampleRate?: number;
   /** Translation engine — "qwen" (commercial-safe, default) or "nllb" (faster). */
   engine?: TranslateEngine;
-  /** TTS engine for the spoken output — "chatterbox" (clones, all languages) or
-   *  "orpheus" (fast English streaming). Empty → server default (chatterbox). */
+  /** TTS engine for the spoken output — "chatterbox" (clones, all languages) or * Empty → server default (chatterbox). */
   ttsEngine?: TtsEngine;
 }
 
@@ -546,19 +544,19 @@ export function openRealtimeSession(
   };
 }
 
-// ─── Text-to-Speech (Chatterbox + Orpheus) ────────────────────────────────────
+// ─── Text-to-Speech (Chatterbox) ──────────────────────────────────────────────
 //
 // Two engines (F5-base and IndicF5 both retired):
 //   chatterbox — Chatterbox Multilingual + Indic LoRA. Zero-shot voice cloning from a short
 //                reference clip + 23 global languages + 8 Indian languages (Hindi, Telugu,
 //                Kannada, Bengali, Tamil, Malayalam, Marathi, Gujarati). The DEFAULT for
 //                everything. No reference transcript needed.
-//   orpheus    — real-time token-streaming TTS (~350 ms first audio, preset English voice),
-//                opted into for lowest-latency English (live translation / voice bot).
 // A single POST returns a finished WAV clip; /stream yields it chunk-by-chunk.
 
-/** TTS engine: Chatterbox (clone + 23 global + 8 Indian langs, default) or Orpheus (fast English). */
-export type TtsEngine = "chatterbox" | "orpheus";
+/** TTS engine. Chatterbox was retired — Chatterbox is the sole cloud-GPU voice
+ *  engine, and hosted engines (Cartesia, ElevenLabs) are selected per tenant
+ *  in Settings rather than here. */
+export type TtsEngine = "chatterbox";
 
 // Chatterbox: 23 base multilingual languages + 8 Indian (via Indic LoRA).
 // Not supported (dropped): Punjabi, Odia, Assamese, Urdu, Sanskrit.
@@ -569,11 +567,10 @@ export const CHATTERBOX_TTS_LANGS: readonly string[] = [
   // Indian via LoRA (hi already above)
   "te", "kn", "bn", "ta", "ml", "mr", "gu",
 ];
-export const ORPHEUS_TTS_LANGS: readonly string[] = ["en"];
 export const SUPPORTED_TTS_LANGS: readonly string[] = CHATTERBOX_TTS_LANGS;
 
 /** Engine for an output language. Chatterbox is universal (clones + every supported language);
- *  Orpheus is opted into explicitly when low-latency English streaming is wanted. */
+ */
 export function engineForLang(_lang: string): TtsEngine {
   return "chatterbox";
 }

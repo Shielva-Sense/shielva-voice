@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createPortal } from "react-dom";
 import { Radio, Mic, Square, Play, Pause, Download, FolderOpen, X, ChevronRight, RefreshCw, Merge, Trash2 } from "lucide-react";
-import { openRealtimeSession, saveLiveTranslationClip, getLiveTranslationClips, deleteHistoryItem, CHATTERBOX_TTS_LANGS, ORPHEUS_TTS_LANGS, type RealtimeEvent, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
+import { openRealtimeSession, saveLiveTranslationClip, getLiveTranslationClips, deleteHistoryItem, CHATTERBOX_TTS_LANGS, type RealtimeEvent, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
 import { saveClipIDB, loadAllClipsIDB, updateClipCloud, deleteClipIDB, bufferToUrl, type StoredClip } from "../lib/live-translation-store";
 import { useAuth } from "../context/AuthContext";
 import { useVoice } from "../context/VoiceContext";
@@ -50,11 +50,9 @@ const SAMPLE_RATE    = 16000;   // 16 kHz mono — Silero VAD requirement
 const CHUNK_SAMPLES  = 1024;    // 64 ms @ 16 kHz — good balance of latency vs network overhead
 const WORKLET_PATH   = "/worklets/audio-capture-processor.js";
 
-// Selectable TTS (voice) engines — mirrors the Text-to-Speech card. Orpheus is English-only
 // and cannot clone; Chatterbox clones a chosen voice and speaks all 30 languages.
 const TTS_ENGINE_OPTIONS: { id: TtsEngine; name: string; hint: string }[] = [
   { id: "chatterbox", name: "Chatterbox", hint: "Voice cloning · 30 languages" },
-  { id: "orpheus", name: "Orpheus", hint: "Fast English streaming" },
 ];
 
 // The realtime pipeline transcribes in-process with a fixed faster-whisper model
@@ -617,10 +615,8 @@ export default function RealTimeVoice() {
   const [srcLang, setSrcLang]     = useState("en");
   const [tgtLang, setTgtLang]     = useState("hi");
   const [engine, setEngine]       = useState<TranslateEngine>("qwen");   // translation engine
-  // TTS (voice) engine follows the OUTPUT language: English → Orpheus (fast) is available and
-  // default; every other language is Chatterbox-only. Voice cloning is a Chatterbox capability.
+    // default; every other language is Chatterbox-only. Voice cloning is a Chatterbox capability.
   const [ttsEngine, setTtsEngine] = useState<TtsEngine>("chatterbox");
-  const orpheusAvailable = ORPHEUS_TTS_LANGS.includes(tgtLang);   // English only
   const canSelectVoice   = ttsEngine === "chatterbox";            // clone only on Chatterbox
   const [active, setActive]       = useState(false);
   const [status, setStatus]       = useState<"idle" | "connecting" | "ready" | "error">("idle");
@@ -664,10 +660,7 @@ export default function RealTimeVoice() {
     }
   }, [isAuthenticated, defaultVoiceId, voices]);
 
-  // The output language drives the voice engine: English defaults to Orpheus (fast streaming,
-  // Chatterbox still selectable); any other language snaps to Chatterbox (Orpheus is English-only).
-  useEffect(() => {
-    setTtsEngine(orpheusAvailable ? "orpheus" : "chatterbox");
+      useEffect(() => {
      
   }, [tgtLang]);
 
@@ -861,8 +854,7 @@ export default function RealTimeVoice() {
     streamRef.current = stream;
 
     // 2. WebSocket session — Chatterbox clones from the selected voice (or the default
-    //    reference when none is chosen); Orpheus uses a fixed preset voice, so no voiceId.
-    const session = openRealtimeSession(
+        const session = openRealtimeSession(
       {
         srcLang,
         tgtLang,
@@ -970,7 +962,7 @@ export default function RealTimeVoice() {
         </div>
         <div>
           <div className="vm-card-title">Real-Time Voice Translation</div>
-          <div className="vm-card-subtitle">VAD → faster-whisper → {engine === "qwen" ? "Qwen" : "NLLB"} → {ttsEngine === "orpheus" ? "Orpheus" : "Chatterbox"}</div>
+          <div className="vm-card-subtitle">VAD → faster-whisper → {engine === "qwen" ? "Qwen" : "NLLB"} → Chatterbox</div>
         </div>
         {active && (
           <div style={{ marginLeft: "auto", display: "flex", alignItems: "center", gap: 6 }}>
@@ -1008,11 +1000,10 @@ export default function RealTimeVoice() {
         </div>
       </div>
 
-      {/* Voice engine — Orpheus only appears for English output; other languages are Chatterbox */}
-      <div style={{ marginBottom: 10 }}>
+            <div style={{ marginBottom: 10 }}>
         <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Voice engine</div>
         <div role="group" aria-label="Voice engine" style={{ display: "inline-flex", gap: 6, flexWrap: "wrap" }}>
-          {TTS_ENGINE_OPTIONS.filter((e) => e.id === "chatterbox" || orpheusAvailable).map((e) => {
+          {TTS_ENGINE_OPTIONS.map((e) => {
             const activeEngine = ttsEngine === e.id;
             return (
               <button
@@ -1040,8 +1031,7 @@ export default function RealTimeVoice() {
         </div>
       </div>
 
-      {/* Voice selector — Chatterbox only. Orpheus is a fixed-voice English engine (no cloning). */}
-      {canSelectVoice && (
+            {canSelectVoice && (
         <div style={{ marginBottom: 10 }}>
           <div className="vm-label" style={{ fontSize: 10, marginBottom: 3 }}>Voice</div>
           <select className="vm-select" value={voiceId} onChange={(e) => setVoiceId(e.target.value)} disabled={active} style={{ fontSize: 12 }}>
@@ -1219,7 +1209,7 @@ export default function RealTimeVoice() {
 
       {/* Info footer */}
       <div className="vm-info" style={{ marginTop: 10 }}>
-        Silero VAD → faster-whisper → translate → <strong>{ttsEngine === "orpheus" ? "Orpheus streaming" : "Chatterbox zero-shot"}</strong>.
+        Silero VAD → faster-whisper → translate → <strong>Chatterbox zero-shot</strong>.
         {" "}AudioWorklet runs in a dedicated thread for glitch-free capture.
       </div>
 
