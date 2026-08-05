@@ -267,7 +267,7 @@ export default function LanguagePickerModal({ isOpen, onClose, value, onSelect, 
         <div style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 18px 32px" }}>
           {filtered.length === 0 && (
             <div style={{ textAlign: "center", padding: "48px 0", color: "var(--text-muted)", fontSize: 13 }}>
-              No languages found for "{query}"
+              No languages found for &quot;{query}&quot;
             </div>
           )}
 

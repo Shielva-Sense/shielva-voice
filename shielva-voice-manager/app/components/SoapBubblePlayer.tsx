@@ -3,6 +3,12 @@
 import { useRef, useState, useEffect, useCallback } from "react";
 import { Download, Loader2, Waves } from "lucide-react";
 
+/** Safari still exposes AudioContext under the webkit prefix. */
+interface WebkitAudioWindow extends Window {
+    webkitAudioContext?: typeof AudioContext;
+}
+
+
 interface Props {
   audioUrl: string;
   name?: string;
@@ -147,7 +153,10 @@ export default function SoapBubblePlayer({ audioUrl, name = "Generated Speech", 
   const initAudioCtx = useCallback(() => {
     if (analyserRef.current || !audioRef.current) return;
     try {
-      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const Ctor = window.AudioContext ??
+        (window as WebkitAudioWindow).webkitAudioContext;
+      if (!Ctor) return;
+      const ctx = new Ctor();
       const src = ctx.createMediaElementSource(audioRef.current);
       const analyser = ctx.createAnalyser();
       analyser.fftSize = 256;

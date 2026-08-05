@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from "react";
 import { Languages, ArrowRightLeft } from "lucide-react";
 import { notify } from "../lib/toast";
-import { translate, getLanguages, type TranslateEngine } from "../lib/amt-api";
+import { isQuotaExceededError, translate, getLanguages, type TranslateEngine } from "../lib/amt-api";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
 import UsageIndicator from "./UsageIndicator";
@@ -104,9 +104,9 @@ export default function Translator() {
       proc.nextStage();
       proc.complete("Translation complete");
       if (isAuthenticated) refreshUsage();
-    } catch (err: any) {
+    } catch (err) {
       proc.cancel();
-      if (err?.quota) {
+      if (isQuotaExceededError(err)) {
         notify.quotaExceeded(err.quota);
       } else {
         notify.serviceOffline(engine === "qwen" ? "Qwen Translator" : "NLLB Translator");

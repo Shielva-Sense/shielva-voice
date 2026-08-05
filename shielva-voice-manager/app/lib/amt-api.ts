@@ -16,6 +16,25 @@ const SESSION_ID_KEY = "amt_public_session_id";
 // TTL removed — session is permanent until the user explicitly clears storage.
 // Rotating the UUID made all previously registered voices invisible (wrong tenant_id).
 
+/** Quota payload the gateway returns with a 429. Mirrors the argument shape of
+ *  `notify.quotaExceeded` in lib/toast.ts — keep the two in step. */
+export interface QuotaInfo {
+  plan?: string;
+  resource?: string;
+  limit?: number;
+  used?: number;
+}
+
+/** 429 from the AMT gateway carries the caller's quota state in the body. */
+export interface QuotaExceededError extends Error {
+  quota: QuotaInfo;
+}
+
+/** Narrow an unknown catch binding to the quota-exceeded shape. */
+export function isQuotaExceededError(e: unknown): e is QuotaExceededError {
+  return e instanceof Error && "quota" in e;
+}
+
 export function getPublicSessionId(): string {
   if (typeof window === "undefined") return "";
   let id = localStorage.getItem(SESSION_ID_KEY);
@@ -131,8 +150,10 @@ export async function fetchAmtHealth(): Promise<Record<string, ServiceHealth>> {
 async function handleQuotaError(res: Response): Promise<void> {
   if (res.status === 429) {
     const data = await res.json();
-    const err = new Error("Usage limit exceeded") as any;
-    err.quota = data;
+    const err: QuotaExceededError = Object.assign(
+      new Error("Usage limit exceeded"),
+      { quota: data as QuotaInfo },
+    );
     throw err;
   }
 }

@@ -1,0 +1,23 @@
+# Pipeline-as-code for the Shielva flow-pipeline (shielva/ci gate).
+# Next.js / React, npm (package-lock.json).
+#
+# Must be a Debian-based image (not alpine): the CI engine injects a `git config`
+# step before `setup`, and alpine ships no git.
+image: node:22
+
+setup:
+  # `ci` (not `install`) so the lockfile is authoritative and the build is
+  # reproducible — a drifting transitive dep must fail here, not in prod.
+  - npm ci --no-audit --no-fund
+
+steps:
+  # ESLint 9 flat config. NOTE: the script is `eslint .`, not `next lint` —
+  # Next 16 removed the `next lint` subcommand, and leaving it in place means
+  # the gate silently never runs.
+  lint: npm run lint
+  # No unit tests yet. For a typed Next app the meaningful correctness gate is
+  # the TypeScript compile — it fails on any type error, which is what has
+  # actually caught regressions here.
+  test: npx tsc --noEmit
+  # Dependency vulnerabilities (high+).
+  audit: npm audit --audit-level=high

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { BrainCircuit, ArrowRight } from "lucide-react";
 import { notify } from "../lib/toast";
-import { classifyIntent, type IntentResult } from "../lib/amt-api";
+import { isQuotaExceededError, classifyIntent, type IntentResult } from "../lib/amt-api";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
 import UsageIndicator from "./UsageIndicator";
@@ -34,9 +34,9 @@ export default function IntentClassifier() {
       proc.nextStage();
       proc.complete(`Intent detected: ${res.intent}`);
       if (isAuthenticated) refreshUsage();
-    } catch (err: any) {
+    } catch (err) {
       proc.cancel();
-      if (err?.quota) {
+      if (isQuotaExceededError(err)) {
         notify.quotaExceeded(err.quota);
       } else {
         notify.serviceOffline("Intent Classifier (BART-large-MNLI)");

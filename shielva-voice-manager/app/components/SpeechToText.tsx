@@ -3,7 +3,7 @@
 import { useState, useRef, useCallback } from "react";
 import { Mic, Square, Tag } from "lucide-react";
 import { notify } from "../lib/toast";
-import { transcribe, classifyIntent, type TranscribeResult, type IntentResult } from "../lib/amt-api";
+import { isQuotaExceededError, transcribe, classifyIntent, type TranscribeResult, type IntentResult } from "../lib/amt-api";
 import { recordMic } from "../lib/audio-utils";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
@@ -77,9 +77,9 @@ export default function SpeechToText() {
       } else {
         proc.complete("Transcription complete — no speech detected");
       }
-    } catch (err: any) {
+    } catch (err) {
       proc.cancel();
-      if (err?.quota) {
+      if (isQuotaExceededError(err)) {
         notify.quotaExceeded(err.quota);
       } else {
         const msg = err instanceof Error ? err.message : String(err);

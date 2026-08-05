@@ -31,7 +31,7 @@ export default function LocalFileMissingToast() {
       onDismiss: clearLocalFileMissingWarning,
       onAutoClose: clearLocalFileMissingWarning,
     });
-  }, [localFileMissingWarning]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [localFileMissingWarning]);  
 
   return null;
 }

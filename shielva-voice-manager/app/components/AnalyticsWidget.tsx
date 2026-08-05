@@ -477,7 +477,7 @@ function WaveformRange({
       } catch { /* silent */ }
     })();
     return () => { cancelled = true; };
-  }, [wavUrl]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [wavUrl]);  
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -609,7 +609,10 @@ function LiveClipsModal({
   });
 
   const toggleSelect = (id: string) => setSelectedIds(prev => {
-    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    return n;
   });
   const toggleAll = () => setSelectedIds(
     selectedIds.size === clips.length ? new Set() : new Set(clips.map(c => c.id))

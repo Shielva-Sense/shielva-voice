@@ -257,7 +257,10 @@ function CollectionModal({
   const selectedCount = orderedClips.filter(c => selectedIds.has(c.id)).length;
 
   const toggleSelect = (id: string) => setSelectedIds(prev => {
-    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+    const n = new Set(prev);
+    if (n.has(id)) n.delete(id);
+    else n.add(id);
+    return n;
   });
   const toggleAll = () => setSelectedIds(
     selectedIds.size === clips.length ? new Set() : new Set(clips.map(c => c.id))
@@ -665,7 +668,7 @@ export default function RealTimeVoice() {
   // Chatterbox still selectable); any other language snaps to Chatterbox (Orpheus is English-only).
   useEffect(() => {
     setTtsEngine(orpheusAvailable ? "orpheus" : "chatterbox");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [tgtLang]);
 
   // ── Restore collections from IndexedDB on mount ──

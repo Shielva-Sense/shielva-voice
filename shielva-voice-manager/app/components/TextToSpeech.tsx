@@ -257,7 +257,7 @@ export default function TextToSpeech() {
   // every other language is Chatterbox-only, so we snap the engine to Chatterbox.
   useEffect(() => {
     setTtsEngine(orpheusAvailable ? "orpheus" : "chatterbox");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [outputLang]);
 
   // ── Computed option arrays for LanguageSelect ────────────────────────────

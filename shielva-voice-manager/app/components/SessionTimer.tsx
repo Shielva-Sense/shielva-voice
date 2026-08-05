@@ -7,23 +7,12 @@ interface Props {
   onExpired: () => void;
 }
 
-function formatHHMMSS(ms: number): string {
-  if (ms <= 0) return "0:00:00";
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
 
-function getUrgency(ms: number): "normal" | "warning" | "critical" {
-  if (ms <= 5 * 60 * 1000) return "critical";
-  if (ms <= 15 * 60 * 1000) return "warning";
-  return "normal";
-}
 
 export default function SessionTimer({ onExpired }: Props) {
-  const [msRemaining, setMsRemaining] = useState<number>(PUBLIC_SESSION_TTL_MS);
+  // The value is intentionally unread: this state exists only so the timer tick
+    // re-renders the component. Renaming it would hide that from the next reader.
+    const [, setMsRemaining] = useState<number>(PUBLIC_SESSION_TTL_MS);
   const [mounted, setMounted] = useState(false);
   const expiredFired = useRef(false);
 
