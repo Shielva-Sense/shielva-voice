@@ -16,7 +16,7 @@
 #   docker build \
 #     --build-arg NEXT_PUBLIC_API_URL=https://amt.shielva.ai \
 #     --build-arg NEXT_PUBLIC_IDENTITY_URL=https://api.shielva.ai \
-#     --build-arg NEXT_PUBLIC_AUTH_URL=https://signin.shielva.ai \
+#     --build-arg NEXT_PUBLIC_AUTH_URL=https://login.shielva.ai \
 #     -t shielva-voice-manager:dev .
 
 FROM node:22-bookworm-slim AS deps
@@ -35,11 +35,13 @@ ARG NEXT_PUBLIC_API_URL=https://amt.shielva.ai
 # Gateway ROOT (no path suffix). AuthContext appends /identity/api/v1/unified/*
 # onto it, so it must be the bare gateway origin.
 ARG NEXT_PUBLIC_IDENTITY_URL=https://api.shielva.ai
-# Sign-in UI host. voice.shielva.ai is a CUSTOMER-audience app (it carries the
-# /plans billing flow), so it authenticates against signin.shielva.ai — NOT
-# login.shielva.ai, which serves the internal/business audience and rejects
-# customer accounts.
-ARG NEXT_PUBLIC_AUTH_URL=https://signin.shielva.ai
+# Login UI host. voice.shielva.ai is the INTERNAL/BUSINESS-audience app, so it
+# authenticates against login.shielva.ai. The customer-facing sibling
+# (speech.shielva.ai) is the one that uses signin.shielva.ai — the two are
+# forks of each other, so do not copy this value between them. Password reset
+# and account eligibility are gated on users.audience, not on role, which is
+# why pointing an app at the wrong host fails at sign-in rather than at build.
+ARG NEXT_PUBLIC_AUTH_URL=https://login.shielva.ai
 # Public (unauthenticated) trial caps.
 ARG NEXT_PUBLIC_PUBLIC_MAX_TEXT_CHARS=100
 ARG NEXT_PUBLIC_PUBLIC_MAX_VOICE_SEC=5
