@@ -22,10 +22,17 @@ export interface EngineGate {
   tts: string | null;
   /** Selected STT engine id, or null when the tenant has not chosen one. */
   stt: string | null;
-  /** True only when both are chosen AND currently usable. */
+  /** True when EITHER capability is usable — the page has something to offer. */
   ready: boolean;
   /** Why not ready — rendered verbatim so the user knows what to fix. */
   reason: string;
+  /** Text-to-speech is chosen AND passes its probe. */
+  ttsReady: boolean;
+  /** Speech-to-text is chosen AND passes its probe. */
+  sttReady: boolean;
+  /** Per-capability explanation, for disabling one column without the other. */
+  ttsReason: string;
+  sttReason: string;
   /** True when the selected TTS engine is our own GPU stack, which is the only
    *  one exposing sub-engine choices (Chatterbox) and translation engines. */
   isCloudGpuTts: boolean;
@@ -64,6 +71,42 @@ export function useEngineGate(enabled: boolean): EngineGate {
   const tts = settings?.tts_provider ?? null;
   const stt = settings?.stt_provider ?? null;
 
+  // Each capability stands on its own. An all-or-nothing gate meant that when
+  // every TTS vendor was down, a perfectly healthy speech-to-text engine was
+  // unusable too and the whole page collapsed to "Choose your engines first" —
+  // with nothing selectable in Settings to clear it. Transcription does not
+  // depend on synthesis, so they are judged separately.
+  let ttsReady = false;
+  let sttReady = false;
+  let ttsReason = "";
+  let sttReason = "";
+
+  if (err) {
+    // FAIL OPEN — see the note below; an outage on our side must not gate tools.
+    ttsReady = true;
+    sttReady = true;
+  } else {
+    if (!tts) {
+      ttsReason = "Choose a text-to-speech engine in Settings.";
+    } else if (catalog) {
+      const t = catalog.tts.find((r) => r.id === tts);
+      if (t && !t.selectable) ttsReason = `Text-to-speech engine is unavailable — ${t.detail}`;
+      else ttsReady = true;
+    } else {
+      ttsReady = true; // selection stored, probe unavailable — don't block on that
+    }
+
+    if (!stt) {
+      sttReason = "Choose a speech-to-text engine in Settings.";
+    } else if (catalog) {
+      const s = catalog.stt.find((r) => r.id === stt);
+      if (s && !s.selectable) sttReason = `Speech-to-text engine is unavailable — ${s.detail}`;
+      else sttReady = true;
+    } else {
+      sttReady = true;
+    }
+  }
+
   let ready = false;
   let reason = "";
   if (err) {
@@ -73,26 +116,16 @@ export function useEngineGate(enabled: boolean): EngineGate {
     // platform defaults, exactly as they behaved before the gate existed.
     ready = true;
     reason = "";
-  } else if (!tts && !stt) {
-    reason = "Choose a speech-to-text and a text-to-speech engine in Settings before using these tools.";
-  } else if (!tts) {
-    reason = "Choose a text-to-speech engine in Settings.";
-  } else if (!stt) {
-    reason = "Choose a speech-to-text engine in Settings.";
-  } else if (catalog) {
-    // A selection that no longer passes its health probe is worse than no
-    // selection: the user thinks they are configured and every call fails.
-    const t = catalog.tts.find((r) => r.id === tts);
-    const s = catalog.stt.find((r) => r.id === stt);
-    if (t && !t.selectable) reason = `Text-to-speech engine is unavailable — ${t.detail}`;
-    else if (s && !s.selectable) reason = `Speech-to-text engine is unavailable — ${s.detail}`;
-    else ready = true;
   } else {
-    ready = true; // settings present, catalog unavailable — do not block on a probe outage
+    // The page is usable as soon as ONE capability works; the other column
+    // renders its own disabled state with its own reason.
+    ready = ttsReady || sttReady;
+    if (!ready) {
+      reason = !tts && !stt
+        ? "Choose a speech-to-text or a text-to-speech engine in Settings to start."
+        : [ttsReason, sttReason].filter(Boolean).join(" ");
+    }
   }
-  // With no selection stored AND no settings backend, there is nothing to choose
-  // from — fall back rather than stranding the user.
-  if (!ready && !tts && !stt && err) ready = true;
 
   return {
     loading,
@@ -100,6 +133,10 @@ export function useEngineGate(enabled: boolean): EngineGate {
     stt,
     ready,
     reason,
+    ttsReady,
+    sttReady,
+    ttsReason,
+    sttReason,
     isCloudGpuTts: tts === "shielva",
     isCloudGpuStt: stt === "amt",
     refresh,

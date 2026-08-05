@@ -77,21 +77,25 @@ export default function Home() {
           </div>
         </div>
 
+        {/* Left nav carries the marketing anchors only. Settings is an
+            account-level control, so it lives in the right-hand cluster with
+            storage / theme / sign-out rather than sitting beside the wordmark
+            where a signed-in user reads it as a section link. */}
         <nav className="vm-nav" aria-label="Primary">
-          {/* Marketing anchors are for visitors; once signed in the nav is
-              workspace navigation, not a pitch. */}
-          {!isAuthenticated ? (
+          {!isAuthenticated && (
             <>
               <a href="/docs">Docs</a>
               <a href="#how">How it works</a>
               <a href="#showcase">Showcase</a>
             </>
-          ) : (
-            <a href="/settings">Settings</a>
           )}
         </nav>
 
         <div className="vm-header-right">
+          {isAuthenticated && (
+            <a href="/settings" className="vm-header-link">Settings</a>
+          )}
+
           {/* Storage mode badge — authenticated users only (public auto-uses local /tmp silently) */}
           {isAuthenticated && (
             <button
@@ -273,20 +277,39 @@ export default function Home() {
             `}</style>
           </div>
 
+          {/* Capabilities are gated independently. When every TTS vendor is
+              down, transcription is still perfectly usable — so render the
+              speech-to-text tools and only withhold the ones that genuinely
+              need synthesis. */}
           <div className="vm-grid">
             <AnalyticsWidget />
-            <SpeechToText />
-            <TextToSpeech />
-            <VoiceLibrary />
-            <VoiceTraining />
+            {gate.sttReady && <SpeechToText />}
+            {gate.ttsReady && <TextToSpeech />}
+            {gate.ttsReady && <VoiceLibrary />}
+            {gate.ttsReady && <VoiceTraining />}
             {/* Translation and live translation are cloud-GPU-only paths
                 (Qwen / NLLB run on our stack). Hosted vendors do not offer
                 them, so showing those controls on Cartesia or ElevenLabs
                 would advertise something the selected engine cannot do. */}
-            {(gate.isCloudGpuTts || !gate.tts) && <Translator />}
-            {(gate.isCloudGpuTts || !gate.tts) && <IntentClassifier />}
-            {(gate.isCloudGpuTts || !gate.tts) && <RealTimeVoice />}
+            {gate.ttsReady && (gate.isCloudGpuTts || !gate.tts) && <Translator />}
+            {gate.ttsReady && (gate.isCloudGpuTts || !gate.tts) && <IntentClassifier />}
+            {gate.ttsReady && (gate.isCloudGpuTts || !gate.tts) && <RealTimeVoice />}
           </div>
+
+          {/* Name the half that is unavailable, in place, so the missing cards
+              read as a known state rather than a rendering bug. */}
+          {(!gate.ttsReady || !gate.sttReady) && (
+            <p className="vm-cap-note">
+              {!gate.ttsReady ? gate.ttsReason : gate.sttReason}{" "}
+              <a href="/settings">Open settings</a>
+            </p>
+          )}
+          <style>{`
+            .vm-cap-note {
+              max-width: 1400px; margin: 4px auto 0; padding: 0 24px;
+              font-size: 12.5px; color: var(--text-secondary);
+            }
+          `}</style>
         </>
       )}
 
@@ -303,6 +326,25 @@ export default function Home() {
           gap: 22px;
           margin-left: 34px;
           margin-right: auto;
+        }
+        /* Settings sits in the right-hand cluster, so it matches the height and
+           weight of the controls beside it rather than the marketing anchors. */
+        .vm-header-link {
+          color: var(--text-secondary);
+          font-size: 13px;
+          text-decoration: none;
+          padding: 0 10px;
+          height: 32px;
+          display: inline-flex;
+          align-items: center;
+          border-radius: 7px;
+          border: 1px solid transparent;
+          transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+        }
+        .vm-header-link:hover,
+        .vm-header-link:focus-visible {
+          color: var(--text-primary);
+          border-color: var(--border-subtle);
         }
         .vm-nav a {
           color: var(--text-secondary);

@@ -154,11 +154,15 @@ export default function SettingsPage() {
 
         /* Two columns on desktop, stacked on tablet down — the cards are dense
            enough that side-by-side stops helping below ~900px. */
+        /* stretch, not start: the two panels hold different numbers of
+           engines, and sizing each to its own content left one card visibly
+           short of the other. Equal height reads as one control surface. */
         .vm-settings-grid {
           display: grid; gap: 16px;
           grid-template-columns: repeat(auto-fit, minmax(420px, 1fr));
-          align-items: start;
+          align-items: stretch;
         }
+        .vm-settings-grid > * { height: 100%; }
         @media (max-width: 900px) {
           .vm-settings-grid { grid-template-columns: 1fr; }
           .vm-settings-root { padding: 20px 14px 48px; }
@@ -198,7 +202,16 @@ export default function SettingsPage() {
           border-color: var(--accent-border, var(--accent));
           background: var(--accent-bg, var(--surface-hover));
         }
-        .vm-eng[data-selectable="false"] { opacity: 0.55; }
+        /* An unavailable engine still has to be READ — its name and the reason
+           it is unavailable are the two things the user most needs here. A
+           blanket opacity faded exactly that text along with the button, so
+           every disabled row went illegible. Signal "inert" with a recessed
+           surface and a muted border instead, and let the disabled control
+           carry the affordance on its own. */
+        .vm-eng[data-selectable="false"] {
+          background: var(--surface-hover, rgba(0, 0, 0, 0.025));
+          border-style: dashed;
+        }
         .vm-eng-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
         .vm-eng-name { font-size: 14px; font-weight: 600; color: var(--text-primary); }
         .vm-eng-pill {
@@ -208,8 +221,11 @@ export default function SettingsPage() {
         }
         .vm-eng-pill[data-tone="ok"] { color: var(--accent); border-color: var(--accent); }
         .vm-eng-pill[data-tone="bad"] { color: #c0392b; border-color: #c0392b55; }
+        /* The reason text is the payload of a failed probe — "quota exhausted",
+           "check GROQ_API_KEY". Secondary-grey at 12.5px on a tinted card was
+           under the AA threshold, so keep it at body contrast. */
         .vm-eng-detail {
-          margin: 7px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-secondary);
+          margin: 7px 0 0; font-size: 12.5px; line-height: 1.55; color: var(--text-primary);
         }
         .vm-eng-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
         .vm-eng-link {
