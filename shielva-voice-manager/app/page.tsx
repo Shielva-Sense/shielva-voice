@@ -5,6 +5,8 @@ import { LogIn, LogOut, User, Sun, Moon, Cloud, HardDrive, SlidersHorizontal } f
 import Image from "next/image";
 import SessionTimer from "./components/SessionTimer";
 import Showcase from "./components/Showcase";
+import { useEngineGate } from "./lib/useEngineGate";
+import { engineLabel } from "./lib/voice-settings";
 import SpeechToText from "./components/SpeechToText";
 import TextToSpeech from "./components/TextToSpeech";
 import VoiceLibrary from "./components/VoiceLibrary";
@@ -39,6 +41,8 @@ export default function Home() {
   // After mount, reads localStorage / time-based preference to avoid hydration mismatch.
   const [theme, setTheme] = useState<"dark" | "light">("dark");
   const { user, isAuthenticated, isLoading, login, logout } = useAuth();
+  // Tools stay locked until this tenant has actually chosen its engines.
+  const gate = useEngineGate(isAuthenticated);
   const { settings: storageSettings, activeMode, isLocalFallback, openModal: openStorageModal, configLoading: storageConfigLoading } = useStorage();
 
   // Hydrate theme from localStorage / time-of-day after first client render
@@ -220,17 +224,77 @@ export default function Home() {
           marketing page and nothing operable. Previously STT, TTS and
           Translation ran pre-login, which handed out real compute to anyone
           who loaded the page. */}
-      {isAuthenticated && (
-        <div className="vm-grid">
-          <AnalyticsWidget />
-          <SpeechToText />
-          <TextToSpeech />
-          <VoiceLibrary />
-          <VoiceTraining />
-          <Translator />
-          <IntentClassifier />
-          <RealTimeVoice />
-        </div>
+      {isAuthenticated && !gate.ready && (
+        <section className="vm-gate">
+          <h2>Choose your engines first</h2>
+          <p>{gate.loading ? "Checking your engine selection…" : gate.reason}</p>
+          {!gate.loading && (
+            <div className="vm-gate-row">
+              <a href="/settings" className="vm-gate-cta">Open Settings</a>
+              <button type="button" onClick={() => void gate.refresh()} className="vm-gate-alt">
+                Re-check
+              </button>
+            </div>
+          )}
+          <style>{`
+            .vm-gate {
+              max-width: 620px; margin: 60px auto; padding: 32px;
+              border: 1px solid var(--border-subtle); border-radius: 14px;
+              background: var(--surface-subtle); text-align: center;
+            }
+            .vm-gate h2 { margin: 0 0 8px; font-size: 19px; font-weight: 600; }
+            .vm-gate p {
+              margin: 0; font-size: 14px; line-height: 1.6;
+              color: var(--text-secondary);
+            }
+            .vm-gate-row { display: flex; gap: 10px; justify-content: center; margin-top: 20px; }
+            .vm-gate-cta, .vm-gate-alt {
+              height: 32px; padding: 0 14px; border-radius: 7px; font-size: 13px;
+              display: inline-flex; align-items: center; cursor: pointer;
+              border: 1px solid var(--border-subtle); text-decoration: none;
+              color: var(--text-primary); background: var(--surface);
+            }
+            .vm-gate-cta {
+              background: var(--brand-500, #6d9f37); border-color: transparent; color: #fff;
+            }
+          `}</style>
+        </section>
+      )}
+
+      {isAuthenticated && gate.ready && (
+        <>
+          {/* The active engines, stated plainly — a tenant on Cartesia should
+              not have to guess which stack their audio is hitting. */}
+          <div className="vm-active-engines">
+            <span>Speech to text: <b>{engineLabel(gate.stt!)}</b></span>
+            <span>Text to speech: <b>{engineLabel(gate.tts!)}</b></span>
+            <a href="/settings">Change</a>
+            <style>{`
+              .vm-active-engines {
+                max-width: 1400px; margin: 0 auto 4px; padding: 0 24px;
+                display: flex; gap: 18px; flex-wrap: wrap; align-items: center;
+                font-size: 12.5px; color: var(--text-secondary);
+              }
+              .vm-active-engines b { color: var(--text-primary); font-weight: 600; }
+              .vm-active-engines a { color: var(--text-secondary); }
+            `}</style>
+          </div>
+
+          <div className="vm-grid">
+            <AnalyticsWidget />
+            <SpeechToText />
+            <TextToSpeech />
+            <VoiceLibrary />
+            <VoiceTraining />
+            {/* Translation and live translation are cloud-GPU-only paths
+                (Qwen / NLLB run on our stack). Hosted vendors do not offer
+                them, so showing those controls on Cartesia or ElevenLabs
+                would advertise something the selected engine cannot do. */}
+            {gate.isCloudGpuTts && <Translator />}
+            {gate.isCloudGpuTts && <IntentClassifier />}
+            {gate.isCloudGpuTts && <RealTimeVoice />}
+          </div>
+        </>
       )}
 
       {/* ─── Footer ─── */}
