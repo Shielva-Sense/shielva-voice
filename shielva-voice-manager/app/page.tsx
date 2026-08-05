@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
-import { LogIn, LogOut, User, Crown, Sun, Moon, Cloud, HardDrive } from "lucide-react";
+import { LogIn, LogOut, User, Crown, Sun, Moon, Cloud, HardDrive, SlidersHorizontal } from "lucide-react";
 import Image from "next/image";
 import { SERVICES, fetchAmtHealth, type ServiceHealth } from "./lib/amt-api";
 import SessionTimer from "./components/SessionTimer";
@@ -102,6 +102,13 @@ export default function Home() {
 
           {/* Global sync — authenticated users only */}
           {isAuthenticated && <SyncWidget />}
+
+          {/* Engine settings — which providers drive STT/TTS for this tenant */}
+          {isAuthenticated && (
+            <a href="/settings" className="vm-theme-toggle" title="Engine settings">
+              <SlidersHorizontal size={15} strokeWidth={2} />
+            </a>
+          )}
 
           <button
             className="vm-theme-toggle"
