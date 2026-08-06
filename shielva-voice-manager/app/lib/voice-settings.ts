@@ -85,14 +85,69 @@ export const listEngines = (): Promise<EngineCatalog> => req<EngineCatalog>("/en
  */
 export const listEngineVoices = (
   engine: string,
-  opts?: { language?: string; limit?: number },
+  opts?: { language?: string; limit?: number; owned?: boolean },
 ): Promise<{ engine: string; voices: PresetVoice[] }> => {
   const qs = new URLSearchParams();
   if (opts?.language) qs.set("language", opts.language);
   if (opts?.limit) qs.set("limit", String(opts.limit));
+  // Vendors keep the public library and the account's own clones in separate
+  // lists, so a cloned voice is invisible unless it is asked for by name.
+  if (opts?.owned) qs.set("owned", "true");
   const query = qs.toString();
   return req(`/engines/${encodeURIComponent(engine)}/voices${query ? `?${query}` : ""}`);
 };
+
+export interface ClonedVoice {
+  voice_id: string;
+  provider: string;
+  status: string;
+  name: string;
+  language: string;
+}
+
+/**
+ * Clone a voice from a reference clip using the tenant's active engine.
+ *
+ * The UI used to post this at the GPU pod's `/amt/v1/voices/train`. That host
+ * is not deployed in every environment — in prod it does not even resolve — so
+ * cloning died at the network layer ("Failed to fetch") for anyone on a hosted
+ * engine, even though the engine they had selected could clone perfectly well.
+ * presence-core resolves the provider per tenant and every provider in the
+ * registry implements cloning.
+ */
+export async function cloneVoice(params: {
+  audio: Blob;
+  name: string;
+  language?: string;
+  durationMs?: number;
+}): Promise<ClonedVoice> {
+  const form = new FormData();
+  // Name the part after the blob's own type so the vendor sees a sane filename
+  // and content-type; Cartesia keys its decoder off both.
+  const ext = (params.audio.type.split("/")[1] || "wav").split(";")[0];
+  form.append("audio", params.audio, `reference.${ext}`);
+  form.append("name", params.name);
+  form.append("language", params.language ?? "en");
+  form.append("duration_ms", String(Math.round(params.durationMs ?? 0)));
+
+  // No Content-Type header — the browser sets the multipart boundary itself.
+  const res = await fetch(`${VOICE_BASE}/clone`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!res.ok) {
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      /* non-JSON error body — keep the status line */
+    }
+    throw new Error(detail);
+  }
+  return res.json() as Promise<ClonedVoice>;
+}
 
 export interface SynthesizeParams {
   text: string;

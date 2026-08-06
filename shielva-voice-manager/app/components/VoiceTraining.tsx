@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useRef, useEffect, useId } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import { Mic, Square, Upload, Trash2, Play, Pause, Sparkles, Globe, Clock, ShieldCheck } from "lucide-react";
 import { notify } from "../lib/toast";
 import { enrollVoice } from "../lib/amt-api";
+import { cloneVoice, engineLabel } from "../lib/voice-settings";
 import { recordMic, decodeAudioBlob, trimToWav } from "../lib/audio-utils";
 import { useInvalidateVoices, useUpsertVoice } from "../hooks/useVoices";
 
@@ -45,9 +47,17 @@ const SUPPORTED_LANGS = [
 
 const fmtSec = (s: number): string => (s < 60 ? `${Math.round(s)}s` : `${Math.floor(s / 60)}m ${Math.round(s % 60)}s`);
 
-export default function VoiceTraining() {
+export interface VoiceTrainingProps {
+  /** The tenant's selected TTS engine — decides which clone path is used. */
+  engine?: string | null;
+}
+
+export default function VoiceTraining({ engine = null }: VoiceTrainingProps) {
   const invalidateVoices = useInvalidateVoices();
   const upsertVoice = useUpsertVoice();
+  const queryClient = useQueryClient();
+  const isCloudGpu = !engine || engine === "shielva";
+  const engineName = engine ? engineLabel(engine) : "the platform default engine";
 
   const nameId = useId();
   const langId = useId();
@@ -144,21 +154,43 @@ export default function VoiceTraining() {
     const trimmedName = voiceName.trim();
     const voiceId = genVoiceId(trimmedName);
     try {
-      const voice = await enrollVoice({
-        voiceId,
-        name: trimmedName,
-        language,
-        refText: refText.trim() || undefined,
-        clips: [clip.blob],
-        onProgress: (evt) => { if (evt.message) setProgressMsg(evt.message); },
-      });
-      upsertVoice({
-        ...voice,
-        voice_id: voice.voice_id || voiceId,
-        name: voice.name || trimmedName,
-        language: voice.language || language,
-      });
-      invalidateVoices();
+      if (isCloudGpu) {
+        // Our own GPU stack keeps the reference clip and the voice registry,
+        // so enrollment stays on it — that is what makes the clip replayable
+        // in the Voice Library.
+        const voice = await enrollVoice({
+          voiceId,
+          name: trimmedName,
+          language,
+          refText: refText.trim() || undefined,
+          clips: [clip.blob],
+          onProgress: (evt) => { if (evt.message) setProgressMsg(evt.message); },
+        });
+        upsertVoice({
+          ...voice,
+          voice_id: voice.voice_id || voiceId,
+          name: voice.name || trimmedName,
+          language: voice.language || language,
+        });
+        invalidateVoices();
+      } else {
+        // Hosted engines clone at the vendor, through presence-core. There is
+        // no local registry to write to — the voice lives in the tenant's
+        // vendor account and comes back from the owned-voices listing, so
+        // that query is what has to be invalidated.
+        setProgressMsg(`Sending the sample to ${engineName}…`);
+        const cloned = await cloneVoice({
+          audio: clip.blob,
+          name: trimmedName,
+          language,
+          durationMs: clip.durationSec * 1000,
+        });
+        await queryClient.invalidateQueries({ queryKey: ["engine-voices", engine] });
+        await queryClient.invalidateQueries({ queryKey: ["engine-voices-owned", engine] });
+        if (cloned.status && cloned.status !== "ready" && cloned.status !== "complete") {
+          notify.info(`Voice "${trimmedName}" is being prepared`, `${engineName} reported: ${cloned.status}.`);
+        }
+      }
       notify.success(`Voice "${trimmedName}" cloned`, "Ready to use in Text to Speech.");
       // Reset the form for the next voice.
       removeClip();
@@ -184,7 +216,10 @@ export default function VoiceTraining() {
         </div>
         <div>
           <div className="vt-title">Clone a voice</div>
-          <div className="vt-subtitle">Clone your voice from a ~10-second sample — no training, ready immediately.</div>
+          <div className="vt-subtitle">
+            Clone your voice from a ~10-second sample — no training, ready immediately.
+            {" "}Cloned on <strong>{engineName}</strong>.
+          </div>
         </div>
       </div>
 

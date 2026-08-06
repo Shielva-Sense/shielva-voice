@@ -9,6 +9,7 @@ import { engineLabel, listEngineVoices, synthesize as synthesizeViaPresence, typ
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
+import VoicePickerModal, { type ClonedVoiceOption } from "./VoicePickerModal";
 import EngineToggle from "./EngineToggle";
 import { useProcessing } from "../context/ProcessingContext";
 import { useAuth } from "../context/AuthContext";
@@ -189,6 +190,7 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
   const [langPickerOpen, setLangPickerOpen] = useState(false);
+  const [voicePickerOpen, setVoicePickerOpen] = useState(false);
   const [langPickerTarget, setLangPickerTarget] = useState<"input" | "output">("output");
   const [showKeyboard, setShowKeyboard] = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -264,14 +266,46 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
 
   const presetsForLang = presets.filter((p) => !p.language || p.language.split("-")[0] === outputLang);
 
-  // Cloned voices are account-scoped and only exist on our own stack.
-  const clonedVoices = isAuthenticated && isCloudGpu ? voices : [];
+  // Voices this account owns at a hosted vendor — i.e. the ones cloned through
+  // us. Vendors keep these OUT of the public preset list (Cartesia filters on
+  // `is_owner`), so without asking for them separately a freshly-cloned voice
+  // would never appear here.
+  const { data: ownedVoices = [] } = useQuery({
+    queryKey: ["engine-voices-owned", ttsEngine],
+    queryFn: async (): Promise<PresetVoice[]> =>
+      (await listEngineVoices(ttsEngine as string, { owned: true, limit: 100 })).voices,
+    enabled: Boolean(ttsEngine) && !isCloudGpu && isAuthenticated,
+    staleTime: 5 * 60 * 1000,
+    retry: 0,
+  });
+
+  // One list of "your voices", whichever store actually holds them for this
+  // engine. Only the cloud-GPU ones have a reference clip to play back.
+  const clonedVoices: ClonedVoiceOption[] = !isAuthenticated
+    ? []
+    : isCloudGpu
+      ? voices.map((v) => ({
+          voice_id: v.voice_id,
+          name: v.name || v.voice_id,
+          detail: v.sample_duration_ms
+            ? `${(v.sample_duration_ms / 1000).toFixed(1)}s reference`
+            : "Cloned voice",
+          previewFromClip: true,
+        }))
+      : ownedVoices.map((v) => ({
+          voice_id: v.voice_id,
+          name: v.name,
+          detail: [v.gender, `Cloned on ${ttsEngineName}`].filter(Boolean).join(" · "),
+          previewFromClip: false,
+        }));
 
   // Human-readable label for the currently selected voice.
+  const selectedVoice = clonedVoices.find((v) => v.voice_id === voiceId);
+  const selectedPreset = presets.find((p) => p.voice_id === voiceId);
   const selectedVoiceName =
-    clonedVoices.find((v) => v.voice_id === voiceId)?.name
-    || presets.find((p) => p.voice_id === voiceId)?.name
-    || `Default ${ttsEngineName} voice`;
+    selectedVoice?.name || selectedPreset?.name || `Default ${ttsEngineName} voice`;
+  const selectedVoiceDetail = selectedVoice?.detail
+    || [selectedPreset?.gender, selectedPreset?.description].filter(Boolean).join(" · ");
 
   // ── Computed option arrays for LanguageSelect ────────────────────────────
   // Which languages are on offer is the ENGINE's answer, not a fixed list: on
@@ -652,41 +686,34 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
         )}
       </div>
 
-      {/* Voice picker — the selected engine's own samples for the chosen output
-          language, plus this account's cloned voices where the engine supports
-          cloning. */}
+      {/* Voice picker. A dropdown of forty vendor voice names says nothing
+          about how any of them sound, so this opens the picker modal where
+          each voice can be played before it is chosen. */}
       <div style={{ marginTop: 12 }}>
         <div className="vm-label" style={{ marginBottom: 4 }}>Voice</div>
-        <label htmlFor="tts-voice" className="vm-visually-hidden">Voice</label>
-        <select
-          id="tts-voice"
-          className="vm-select"
-          value={voiceId}
-          onChange={(e) => setVoiceId(e.target.value)}
+        <button
+          type="button"
           disabled={generating}
+          onClick={() => setVoicePickerOpen(true)}
+          style={{
+            width: "100%", display: "flex", alignItems: "center", gap: 8,
+            padding: "7px 10px", borderRadius: 8,
+            border: "1px solid var(--border-subtle)",
+            background: "var(--surface-subtle)",
+            color: "var(--text-primary)", fontSize: 12,
+            cursor: generating ? "not-allowed" : "pointer",
+            opacity: generating ? 0.5 : 1, textAlign: "left", outline: "none",
+          }}
         >
-          <option value="">Default {ttsEngineName} voice</option>
-          {presetsForLang.length > 0 && (
-            <optgroup label={`${ttsEngineName} voices`}>
-              {presetsForLang.map((p) => (
-                <option key={p.voice_id} value={p.voice_id}>
-                  {p.name}
-                  {p.gender ? ` · ${p.gender}` : ""}
-                </option>
-              ))}
-            </optgroup>
-          )}
-          {clonedVoices.length > 0 && (
-            <optgroup label="Your cloned voices">
-              {clonedVoices.map((v) => (
-                <option key={v.voice_id} value={v.voice_id}>
-                  {v.name || v.voice_id}
-                  {v.language ? ` · ${LANGUAGES[v.language]?.flag ?? ""} ${LANGUAGES[v.language]?.name ?? v.language}` : ""}
-                </option>
-              ))}
-            </optgroup>
-          )}
-        </select>
+          <Volume2 size={14} strokeWidth={2} style={{ flexShrink: 0, color: "var(--bamboo-500)" }} />
+          <span style={{ flex: 1, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            {selectedVoiceName}
+            {selectedVoiceDetail && (
+              <span style={{ color: "var(--text-muted)" }}> · {selectedVoiceDetail}</span>
+            )}
+          </span>
+          <span style={{ fontSize: 10, color: "var(--text-muted)" }}>▾</span>
+        </button>
         <div style={{ fontSize: 10, color: "var(--bamboo-500)", marginTop: 4, paddingLeft: 4 }}>
           {!isAuthenticated
             ? "Sign in to clone and use your own voice."
@@ -696,9 +723,9 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
                 : clonedVoices.length === 0
                   ? "Add a reference in the Voice Library to clone your own voice."
                   : "Using the built-in reference. Pick a Library voice to clone your own."
-              : presetsForLang.length === 0
+              : presetsForLang.length === 0 && clonedVoices.length === 0
                 ? `${ttsEngineName} publishes no voices for ${LANGUAGES[outputLang]?.name ?? outputLang}. Pick another output language.`
-                : `${presetsForLang.length} ${ttsEngineName} voices for ${LANGUAGES[outputLang]?.name ?? outputLang}. Voice cloning runs on our own GPU stack — switch engines in Settings to use it.`}
+                : `${presetsForLang.length} ${ttsEngineName} voices for ${LANGUAGES[outputLang]?.name ?? outputLang}${clonedVoices.length ? ` + ${clonedVoices.length} of yours` : ""} — press play in the picker to hear any of them.`}
         </div>
       </div>
 
@@ -752,6 +779,19 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
           </>
         )}
       </div>
+
+      {/* Voice Picker Modal — playable samples for the chosen output language */}
+      <VoicePickerModal
+        isOpen={voicePickerOpen}
+        onClose={() => setVoicePickerOpen(false)}
+        value={voiceId}
+        onSelect={setVoiceId}
+        presets={presetsForLang}
+        cloned={clonedVoices}
+        engineName={ttsEngineName}
+        language={outputLang}
+        languageLabel={LANGUAGES[outputLang]?.name ?? outputLang}
+      />
 
       {/* Language Picker Modal */}
       <LanguagePickerModal
