@@ -1,14 +1,15 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
+import { useState, useCallback } from "react";
 import { Users, Trash2, Play, Pause, Download, Star } from "lucide-react";
 import { notify } from "../lib/toast";
-import { deleteVoice, deleteVoiceFull, fetchVoiceAudio, type VoiceInfo } from "../lib/amt-api";
+import { deleteVoice, deleteVoiceFull, type VoiceInfo } from "../lib/amt-api";
 import UsageIndicator from "./UsageIndicator";
 import StoragePathWidget from "./StoragePathWidget";
 import VoiceLibraryModal from "./VoiceLibraryModal";
 import { useVoice } from "../context/VoiceContext";
 import { useClonedVoices, useInvalidateVoices } from "../hooks/useVoices";
+import { useVoicePreview } from "../hooks/useVoicePreview";
 import { engineLabel } from "../lib/voice-settings";
 import { confirmDialog } from "./ui/ConfirmDialog";
 
@@ -25,8 +26,6 @@ export default function VoiceLibrary({ engine = null }: VoiceLibraryProps) {
   const invalidateVoices = useInvalidateVoices();
   const total = voices.length;
 
-  const [playingVoiceId, setPlayingVoiceId] = useState<string | null>(null);
-  const [voiceAudioLoading, setVoiceAudioLoading] = useState<string | null>(null);
   const [downloadingVoiceId, setDownloadingVoiceId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [langFilter, setLangFilter] = useState<string>("");
@@ -38,65 +37,44 @@ export default function VoiceLibrary({ engine = null }: VoiceLibraryProps) {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
 
-  const voiceAudioUrls = useRef<Record<string, string>>({});
-  const voiceAudioEl = useRef<HTMLAudioElement | null>(null);
-
   const refresh = useCallback(() => { invalidateVoices(); }, [invalidateVoices]);
 
-  useEffect(() => {
-    const urls = voiceAudioUrls.current;
-    return () => { Object.values(urls).forEach((u) => URL.revokeObjectURL(u)); };
-  }, []);
+  /**
+   * Every voice is playable, whichever store holds it.
+   *
+   * A voice cloned on our own stack plays its stored reference clip. A voice
+   * cloned at a vendor has no clip to fetch — the vendor keeps the model — so
+   * the preview is synthesized with that voice instead. Hiding the button
+   * there (which is what this did) left a cloned voice you could not hear at
+   * all, and hearing it is the whole point of having cloned it.
+   */
+  const {
+    playingId: playingVoiceId,
+    loadingId: voiceAudioLoading,
+    toggle: previewVoice,
+    stop: stopPreview,
+    cachedUrl,
+  } = useVoicePreview();
 
-  // ── Playback ───────────────────────────────────────────────────────────────
-  const handleVoicePlay = async (voiceId: string) => {
-    if (playingVoiceId === voiceId) {
-      voiceAudioEl.current?.pause();
-      setPlayingVoiceId(null);
-      return;
-    }
-    voiceAudioEl.current?.pause();
-    setPlayingVoiceId(null);
-    let url = voiceAudioUrls.current[voiceId];
-    if (!url) {
-      setVoiceAudioLoading(voiceId);
-      try {
-        const blob = await fetchVoiceAudio(voiceId);
-        url = URL.createObjectURL(blob);
-        voiceAudioUrls.current[voiceId] = url;
-      } catch (err) {
-        setVoiceAudioLoading(null);
-        if ((err as Error)?.message === "no_audio") notify.warning("No audio sample", "This voice has no stored reference clip.");
-        else notify.error("Playback failed", "Could not load the voice sample.");
-        return;
-      } finally {
-        setVoiceAudioLoading(null);
-      }
-    }
-    const audio = new Audio(url);
-    voiceAudioEl.current = audio;
-    setPlayingVoiceId(voiceId);
-    audio.onended = () => setPlayingVoiceId(null);
-    audio.onerror = () => setPlayingVoiceId(null);
-    audio.play().catch(() => setPlayingVoiceId(null));
-  };
+  const handleVoicePlay = (v: VoiceInfo) =>
+    previewVoice({ id: v.voice_id, fromClip: isCloudGpu, language: v.language || "en" });
 
-  const handleVoiceDownload = async (voiceId: string) => {
-    setDownloadingVoiceId(voiceId);
+  const handleVoiceDownload = async (v: VoiceInfo) => {
+    setDownloadingVoiceId(v.voice_id);
     try {
-      let url = voiceAudioUrls.current[voiceId];
+      // Reuse whatever the preview already produced rather than fetching or
+      // synthesizing a second copy of the same audio.
+      let url = cachedUrl(v.voice_id, v.language || "en");
       if (!url) {
-        const blob = await fetchVoiceAudio(voiceId);
-        url = URL.createObjectURL(blob);
-        voiceAudioUrls.current[voiceId] = url;
+        await previewVoice({ id: v.voice_id, fromClip: isCloudGpu, language: v.language || "en" });
+        stopPreview();
+        url = cachedUrl(v.voice_id, v.language || "en");
       }
+      if (!url) return; // previewVoice already reported why
       const a = document.createElement("a");
       a.href = url;
-      a.download = `${voiceId}.wav`;
+      a.download = `${v.name || v.voice_id}.wav`;
       a.click();
-    } catch (err) {
-      if ((err as Error)?.message === "no_audio") notify.warning("No audio sample", "This voice has no stored reference clip.");
-      else notify.error("Download failed", "Could not fetch the voice sample.");
     } finally {
       setDownloadingVoiceId(null);
     }
@@ -115,16 +93,10 @@ export default function VoiceLibrary({ engine = null }: VoiceLibraryProps) {
 
   // ── Delete ─────────────────────────────────────────────────────────────────
 
-  /** Release anything this voice holds locally before the row disappears. */
+  /** Release anything this voice holds locally before the row disappears.
+   *  Cached preview audio is owned by useVoicePreview and revoked on unmount. */
   const releaseLocalState = (id: string) => {
-    if (playingVoiceId === id) {
-      voiceAudioEl.current?.pause();
-      setPlayingVoiceId(null);
-    }
-    if (voiceAudioUrls.current[id]) {
-      URL.revokeObjectURL(voiceAudioUrls.current[id]);
-      delete voiceAudioUrls.current[id];
-    }
+    if (playingVoiceId === id) stopPreview();
     if (defaultVoiceId === id) setDefaultVoice(null);
   };
 
@@ -399,39 +371,35 @@ export default function VoiceLibrary({ engine = null }: VoiceLibraryProps) {
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                {/* Playback and download read the STORED REFERENCE CLIP, which
-                    only exists for voices cloned on our own stack. A vendor
-                    holds the model and never gives the clip back, so these are
-                    hidden there rather than offered and then failing. Preview a
-                    vendor voice from the Text to Speech voice picker, which
-                    synthesizes a sample instead. */}
-                {isCloudGpu && (
-                  <>
-                    <button
-                      className="vm-voice-delete"
-                      onClick={() => handleVoicePlay(v.voice_id)}
-                      aria-label={playingVoiceId === v.voice_id ? "Stop playback" : "Play sample"}
-                      title={playingVoiceId === v.voice_id ? "Stop playback" : "Play sample"}
-                      style={{ color: playingVoiceId === v.voice_id ? "var(--bamboo-400)" : undefined }}
-                    >
-                      {voiceAudioLoading === v.voice_id
-                        ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
-                        : playingVoiceId === v.voice_id
-                          ? <Pause size={14} strokeWidth={2} />
-                          : <Play size={14} strokeWidth={2} />}
-                    </button>
-                    <button
-                      className="vm-voice-delete"
-                      onClick={() => handleVoiceDownload(v.voice_id)}
-                      aria-label="Download voice sample"
-                      title="Download voice sample"
-                    >
-                      {downloadingVoiceId === v.voice_id
-                        ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
-                        : <Download size={14} strokeWidth={2} />}
-                    </button>
-                  </>
-                )}
+                <button
+                  className="vm-voice-delete"
+                  onClick={() => void handleVoicePlay(v)}
+                  aria-label={playingVoiceId === v.voice_id ? "Stop playback" : "Play sample"}
+                  title={
+                    playingVoiceId === v.voice_id
+                      ? "Stop playback"
+                      : isCloudGpu
+                        ? "Play the reference clip"
+                        : `Hear this voice — ${engineName} speaks a short sample`
+                  }
+                  style={{ color: playingVoiceId === v.voice_id ? "var(--bamboo-400)" : undefined }}
+                >
+                  {voiceAudioLoading === v.voice_id
+                    ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
+                    : playingVoiceId === v.voice_id
+                      ? <Pause size={14} strokeWidth={2} />
+                      : <Play size={14} strokeWidth={2} />}
+                </button>
+                <button
+                  className="vm-voice-delete"
+                  onClick={() => void handleVoiceDownload(v)}
+                  aria-label="Download voice sample"
+                  title={isCloudGpu ? "Download the reference clip" : "Download a sample of this voice"}
+                >
+                  {downloadingVoiceId === v.voice_id
+                    ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
+                    : <Download size={14} strokeWidth={2} />}
+                </button>
                 <button
                   className="vm-voice-delete"
                   onClick={() => handleSetDefault(v.voice_id)}

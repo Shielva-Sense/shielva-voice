@@ -3,10 +3,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { X, Search, Play, Pause, Volume2 } from "lucide-react";
-import { getSampleText } from "./LanguagePickerModal";
-import { synthesize as synthesizeViaPresence, type PresetVoice } from "../lib/voice-settings";
-import { fetchVoiceAudio } from "../lib/amt-api";
-import { notify } from "../lib/toast";
+import { type PresetVoice } from "../lib/voice-settings";
+import { useVoicePreview } from "../hooks/useVoicePreview";
 
 /**
  * Voice picker with an audible preview.
@@ -89,12 +87,8 @@ export default function VoicePickerModal({
   const [query, setQuery] = useState("");
   const [hovered, setHovered] = useState<string | null>(null);
   const [mounted, setMounted] = useState(false);
-  const [playingId, setPlayingId] = useState<string | null>(null);
-  const [loadingId, setLoadingId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  /** voiceId|language → object URL. Kept for the life of the modal. */
-  const previewUrls = useRef<Record<string, string>>({});
+  const { playingId, loadingId, toggle, stop } = useVoicePreview();
 
   useEffect(() => setMounted(true), []);
 
@@ -108,19 +102,8 @@ export default function VoicePickerModal({
   // Stop playback whenever the modal closes — audio outliving the dialog it
   // belongs to is disorienting.
   useEffect(() => {
-    if (isOpen) return;
-    audioRef.current?.pause();
-    audioRef.current = null;
-    setPlayingId(null);
-  }, [isOpen]);
-
-  useEffect(() => {
-    const urls = previewUrls.current;
-    return () => {
-      audioRef.current?.pause();
-      Object.values(urls).forEach((u) => URL.revokeObjectURL(u));
-    };
-  }, []);
+    if (!isOpen) stop();
+  }, [isOpen, stop]);
 
   useEffect(() => {
     if (!isOpen) return;
@@ -154,51 +137,8 @@ export default function VoicePickerModal({
   const shownCloned = useMemo(() => filter(clonedCards), [clonedCards, query]);
   const shownPresets = useMemo(() => filter(presetCards), [presetCards, query]);
 
-  const play = async (card: VoiceCard | null) => {
-    const id = card?.id ?? "";
-    // Second click on the one that is playing = stop.
-    if (playingId === id) {
-      audioRef.current?.pause();
-      audioRef.current = null;
-      setPlayingId(null);
-      return;
-    }
-    audioRef.current?.pause();
-    audioRef.current = null;
-    setPlayingId(null);
-
-    const key = `${id}|${language}`;
-    let url = previewUrls.current[key];
-    if (!url) {
-      setLoadingId(id);
-      try {
-        const blob = card?.fromClip
-          ? await fetchVoiceAudio(card.id)
-          : (await synthesizeViaPresence({
-              text: getSampleText(language),
-              language,
-              ...(id ? { voiceId: id } : {}),
-            })).blob;
-        url = URL.createObjectURL(blob);
-        previewUrls.current[key] = url;
-      } catch (err) {
-        setLoadingId(null);
-        const msg = err instanceof Error ? err.message : String(err);
-        if (msg === "no_audio") notify.warning("No sample stored", "This voice has no reference clip to play.");
-        else notify.error("Preview failed", msg);
-        return;
-      } finally {
-        setLoadingId(null);
-      }
-    }
-
-    const audio = new Audio(url);
-    audioRef.current = audio;
-    setPlayingId(id);
-    audio.onended = () => setPlayingId(null);
-    audio.onerror = () => setPlayingId(null);
-    void audio.play().catch(() => setPlayingId(null));
-  };
+  const play = (card: VoiceCard | null) =>
+    toggle({ id: card?.id ?? "", fromClip: card?.fromClip ?? false, language });
 
   if (!isOpen || !mounted) return null;
 
