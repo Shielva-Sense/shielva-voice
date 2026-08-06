@@ -572,21 +572,24 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
         </div>
       )}
 
-      {/* Translation runs on the GPU stack, which is not deployed. Say so
-          up-front: synthesizing the untranslated text would speak English
-          words with a Hindi voice and look like a broken clone. */}
+      {/* The engine CAN speak the output language — what is missing is
+          translating the input text into it, which is not a TTS function at
+          all. Saying "engine X is not available in Hindi" was simply wrong and
+          made a working engine look broken. */}
       {inputLang !== outputLang && !isCloudGpu && (
         <div
           role="note"
           style={{
             marginBottom: 8, padding: "7px 10px", borderRadius: 8, fontSize: 11,
             lineHeight: 1.5, color: "var(--text-secondary)",
-            background: "rgba(192,57,43,0.06)", border: "1px solid rgba(192,57,43,0.3)",
+            background: "var(--surface-subtle)", border: "1px solid var(--border-subtle)",
           }}
         >
-          Translation runs on our own GPU stack, which is not available on {ttsEngineName}.
-          Type the text in {LANGUAGES[outputLang]?.name ?? outputLang} — {ttsEngineName} will
-          speak it in your selected voice — or set both languages the same.
+          <strong>{ttsEngineName} speaks {LANGUAGES[outputLang]?.name ?? outputLang}</strong>
+          {presetsForLang.length > 0 ? ` (${presetsForLang.length} voices)` : ""} — what it
+          cannot do is translate. Your {LANGUAGES[inputLang]?.name ?? inputLang} text will be
+          spoken as written, not converted. Type it in{" "}
+          {LANGUAGES[outputLang]?.name ?? outputLang}, or set both languages the same.
         </div>
       )}
 
