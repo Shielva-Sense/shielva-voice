@@ -167,21 +167,50 @@ export interface TranscribeResult {
 }
 
 export async function transcribe(audioBlob: Blob, language?: string): Promise<TranscribeResult> {
-  const form = new FormData();
-  form.append("audio", audioBlob, "recording.wav");
+  // Transcription goes through presence-core, NOT /amt/v1/transcribe.
+  //
+  // The AMT (cloud-GPU) service is not deployed in every environment, so that
+  // path 404'd and surfaced as "Whisper ASR service is temporarily
+  // unavailable" — while the engine the tenant actually selected in Settings
+  // (e.g. Groq Whisper) sat there working. presence-core resolves the engine
+  // per tenant, so this also makes the Settings choice take effect here.
+  //
+  // presence takes RAW PCM-16 mono in the body with the rate in a header, not
+  // a multipart WAV, so decode and convert before sending.
+  const raw = await audioBlob.arrayBuffer();
+  const ctx = new (window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)({
+    sampleRate: 16000,
+  });
+  let pcm: Int16Array;
+  let sampleRate = 16000;
+  try {
+    const decoded = await ctx.decodeAudioData(raw.slice(0));
+    const ch = decoded.getChannelData(0);
+    sampleRate = decoded.sampleRate;
+    pcm = new Int16Array(ch.length);
+    for (let i = 0; i < ch.length; i++) {
+      const x = Math.max(-1, Math.min(1, ch[i] as number));
+      pcm[i] = x < 0 ? x * 0x8000 : x * 0x7fff;
+    }
+  } finally {
+    void ctx.close();
+  }
 
-  const res = await fetch(`${AMT_BASE}/amt/v1/transcribe`, {
+  const res = await fetch(`${GATEWAY_BASE}/presence/api/v1/voice/transcribe`, {
     method: "POST",
-    headers: amtHeaders(language ? { "X-Language": language } : undefined),
-    body: form,
+    headers: {
+      "Content-Type": "application/octet-stream",
+      "X-Language": language || "en",
+      "X-Sample-Rate": String(sampleRate),
+    },
+    body: pcm.buffer as ArrayBuffer,
     credentials: "include",
   });
 
   await handleQuotaError(res);
-
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`Transcription failed: ${err}`);
+    throw new Error(`Transcription failed: ${await res.text()}`);
   }
   return res.json();
 }

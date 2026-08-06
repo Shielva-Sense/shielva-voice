@@ -1199,8 +1199,12 @@ function ViewAllModal({
                       {formatTimestamp(item.created_at)}
                     </div>
 
-                    {/* Actions */}
-                    <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end" }}>
+                    {/* Actions.
+                        minWidth reserves room for the widest state (the inline
+                        "Delete? Yes No" confirm). Without it the cell grew when
+                        the confirm opened and pushed the controls over the
+                        timestamp column - the buttons visibly overlapped. */}
+                    <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end", alignItems: "center", minWidth: 132, flexShrink: 0 }}>
                       {audioUrl && (
                         <>
                           <button
@@ -1246,7 +1250,7 @@ function ViewAllModal({
                         </button>
                       )}
                       {confirmDeleteId === item.id ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: 4 }} onClick={(e) => e.stopPropagation()}>
+                        <div style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
                           <span style={{ fontSize: 11, color: "var(--gray-400)" }}>Delete?</span>
                           <button
                             onClick={(e) => handleDelete(item, e)}
