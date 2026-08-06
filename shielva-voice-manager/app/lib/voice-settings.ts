@@ -25,12 +25,49 @@ export interface EngineRow {
   quota_left: number | null;
   /** False → render the option disabled. The server decided this, not the UI. */
   selectable: boolean;
+  /**
+   * ISO codes this engine can actually speak, from the server.
+   *
+   * Deliberately NOT derived from the voice catalog: the vendor caps a voice
+   * listing at 100, so sampling it hides most of the languages — which is how
+   * the picker ended up offering a handful for an engine that speaks forty.
+   */
+  languages?: string[];
 }
 
 export interface EngineCatalog {
   active: { tts: string; stt: string };
   tts: EngineRow[];
   stt: EngineRow[];
+}
+
+/**
+ * Store a generated clip so it can be replayed from Voice Analytics.
+ *
+ * Synthesis streams the audio and keeps nothing, so every generation showed up
+ * in the history with a dash and no play button. Only deliberate generations
+ * are uploaded — picker previews are cached in the browser and never stored.
+ */
+export async function uploadClip(
+  audio: Blob,
+  meta: { feature?: string; text?: string; language?: string; voiceId?: string; durationMs?: number },
+): Promise<string> {
+  const form = new FormData();
+  form.append("audio", audio, "generated.wav");
+  form.append("feature", meta.feature ?? "text_to_speech");
+  form.append("text", (meta.text ?? "").slice(0, 200));
+  form.append("language", meta.language ?? "");
+  form.append("voice_id", meta.voiceId ?? "");
+  form.append("duration_ms", String(Math.round(meta.durationMs ?? 0)));
+
+  const res = await fetch(`${VOICE_BASE}/clips`, {
+    method: "POST",
+    credentials: "include",
+    body: form,
+  });
+  if (!res.ok) throw new Error(await detail(res));
+  const body = (await res.json()) as { url: string };
+  return body.url;
 }
 
 export interface PresetVoice {

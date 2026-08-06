@@ -285,7 +285,7 @@ export default function Home() {
           <div className="vm-grid">
             <AnalyticsWidget />
             {gate.sttReady && <SpeechToText />}
-            {gate.ttsReady && <TextToSpeech engine={gate.tts} />}
+            {gate.ttsReady && <TextToSpeech engine={gate.tts} languages={gate.ttsLanguages} />}
             {gate.ttsReady && <VoiceLibrary engine={gate.tts} />}
             {gate.ttsReady && <VoiceTraining engine={gate.tts} />}
             {/* Translation and live translation are cloud-GPU-only paths

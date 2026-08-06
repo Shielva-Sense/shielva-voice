@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
 import { synthesizeSpeech, translate, getLanguages, recordUsage, CHATTERBOX_TTS_LANGS, type TranslateEngine } from "../lib/amt-api";
-import { engineLabel, listEngineVoices, synthesize as synthesizeViaPresence, type PresetVoice } from "../lib/voice-settings";
+import { engineLabel, listEngineVoices, synthesize as synthesizeViaPresence, uploadClip, type PresetVoice } from "../lib/voice-settings";
 import { audioDurationSeconds } from "../lib/audio-utils";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
@@ -59,6 +59,20 @@ const LANGUAGES: Record<string, { name: string; flag: string; group: "indian" | 
   uk: { name: "Ukrainian",  flag: "🇺🇦", group: "international" },
   cs: { name: "Czech",      flag: "🇨🇿", group: "international" },
   hu: { name: "Hungarian",  flag: "🇭🇺", group: "international" },
+  // All verified present in Cartesia's live catalog (Hebrew alone has 63
+  // voices). A language with no entry here is silently dropped from the
+  // picker, which is how an engine speaking forty offered barely a dozen.
+  he: { name: "Hebrew",     flag: "🇮🇱", group: "international" },
+  tl: { name: "Tagalog",    flag: "🇵🇭", group: "international" },
+  da: { name: "Danish",     flag: "🇩🇰", group: "international" },
+  fi: { name: "Finnish",    flag: "🇫🇮", group: "international" },
+  el: { name: "Greek",      flag: "🇬🇷", group: "international" },
+  no: { name: "Norwegian",  flag: "🇳🇴", group: "international" },
+  ms: { name: "Malay",      flag: "🇲🇾", group: "international" },
+  ro: { name: "Romanian",   flag: "🇷🇴", group: "international" },
+  bg: { name: "Bulgarian",  flag: "🇧🇬", group: "international" },
+  hr: { name: "Croatian",   flag: "🇭🇷", group: "international" },
+  sk: { name: "Slovak",     flag: "🇸🇰", group: "international" },
 };
 
 // ─── Virtual Keyboard Layouts ────────────────────────────────────────────────
@@ -167,9 +181,18 @@ export interface TextToSpeechProps {
    * applies and the card behaves as it did before engine selection existed.
    */
   engine?: string | null;
+  /**
+   * ISO codes the selected engine speaks, from the server's engine catalog.
+   * Empty falls back to the client list — never to a sample of the voice
+   * catalog, which the vendor truncates at 100 and so hides most languages.
+   */
+  languages?: string[];
 }
 
-export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechProps) {
+export default function TextToSpeech({
+  engine: ttsEngine = null,
+  languages: engineLanguages = [],
+}: TextToSpeechProps) {
   const { defaultVoiceId } = useVoice();
   const { voices } = useVoices();
   const { canUseFeature, openModal: openStorageModal } = useStorage();
@@ -315,7 +338,7 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
   // the selected engine cannot speak is what produced silent 502s.
   const engineLangCodes: string[] = isCloudGpu
     ? availableLangs.filter((l) => CHATTERBOX_TTS_LANGS.includes(l))
-    : [...new Set(presets.map((p) => p.language?.split("-")[0]).filter(Boolean) as string[])];
+    : engineLanguages;
 
   const engineLangOptions: LangOption[] = (engineLangCodes.length ? engineLangCodes : availableLangs)
     .filter((l) => LANGUAGES[l])
@@ -447,6 +470,24 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
       // because nothing ever reported a duration — `voiceSeconds` existed on
       // the metering call and no caller passed it.
       const spokenSeconds = await audioDurationSeconds(wavBlob);
+
+      // Keep the generated audio so the Analytics row can play it. Hosted
+      // engines stream the bytes and store nothing, which is why every row
+      // showed a dash and no play button. Best-effort: the user already has
+      // their audio, so a storage failure must not fail the generation.
+      if (isAuthenticated && !audioUrl) {
+        try {
+          audioUrl = await uploadClip(wavBlob, {
+            feature: "text_to_speech",
+            text: speakText,
+            language: outputLang,
+            voiceId,
+            durationMs: spokenSeconds * 1000,
+          });
+        } catch {
+          /* replay is a bonus; the generation already succeeded */
+        }
+      }
 
       clearTimers();
       proc.complete("Speech generated successfully");

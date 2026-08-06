@@ -37,6 +37,8 @@ export interface EngineGate {
    *  one exposing sub-engine choices (Chatterbox) and translation engines. */
   isCloudGpuTts: boolean;
   isCloudGpuStt: boolean;
+  /** Languages the selected TTS engine speaks. Empty → use the client list. */
+  ttsLanguages: string[];
   refresh: () => Promise<void>;
 }
 
@@ -137,6 +139,7 @@ export function useEngineGate(enabled: boolean): EngineGate {
     sttReady,
     ttsReason,
     sttReason,
+    ttsLanguages: (tts && catalog?.tts.find((r) => r.id === tts)?.languages) || [],
     isCloudGpuTts: tts === "shielva",
     isCloudGpuStt: stt === "amt",
     refresh,
