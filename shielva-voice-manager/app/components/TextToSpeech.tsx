@@ -371,9 +371,17 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
           setTranslatedText(speakText);
           proc.nextStage(`Translated → "${speakText.slice(0, 60)}${speakText.length > 60 ? "…" : ""}"`);
         } catch {
-          // Translation timed out or failed — proceed with original text
-          proc.addLog(`Translation unavailable — synthesizing original text`);
-          proc.nextStage("Synthesizing original text...");
+          // Falling through with the ORIGINAL text used to be silent. That is
+          // what produced English words spoken by a Hindi voice — which reads
+          // as a broken voice clone, not as "translation is unavailable". Say
+          // it plainly and still speak the text, so the output is never a
+          // mystery.
+          proc.addLog("Translation unavailable — speaking the text as written");
+          proc.nextStage("Speaking the text as written...");
+          notify.warning(
+            "Translation unavailable",
+            `The text was not translated to ${LANGUAGES[outputLang]?.name ?? outputLang}; it is being spoken as written.`,
+          );
         } finally {
           setIsTranslating(false);
         }
@@ -548,10 +556,30 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
         </div>
       </div>
 
-      {/* Translation engine — used only when input and output languages differ */}
-      {inputLang !== outputLang && (
+      {/* Translation engine — Qwen and NLLB both run on OUR GPU stack, so the
+          choice is meaningless on a hosted engine and the picker is hidden
+          there rather than offering models the tenant is not using. */}
+      {inputLang !== outputLang && isCloudGpu && (
         <div style={{ marginBottom: 8 }}>
           <EngineToggle value={engine} onChange={setEngine} disabled={generating || isTranslating} label="Translation engine" />
+        </div>
+      )}
+
+      {/* Translation runs on the GPU stack, which is not deployed. Say so
+          up-front: synthesizing the untranslated text would speak English
+          words with a Hindi voice and look like a broken clone. */}
+      {inputLang !== outputLang && !isCloudGpu && (
+        <div
+          role="note"
+          style={{
+            marginBottom: 8, padding: "7px 10px", borderRadius: 8, fontSize: 11,
+            lineHeight: 1.5, color: "var(--text-secondary)",
+            background: "rgba(192,57,43,0.06)", border: "1px solid rgba(192,57,43,0.3)",
+          }}
+        >
+          Translation runs on our own GPU stack, which is not available on {ttsEngineName}.
+          Type the text in {LANGUAGES[outputLang]?.name ?? outputLang} — {ttsEngineName} will
+          speak it in your selected voice — or set both languages the same.
         </div>
       )}
 

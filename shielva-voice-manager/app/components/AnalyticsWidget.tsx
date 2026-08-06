@@ -27,6 +27,7 @@ import {
   Radio,
 } from "lucide-react";
 import {
+  amtUrl,
   getHistory,
   getHistoryStats,
   deleteHistoryItem,
@@ -39,7 +40,7 @@ import { useAuth } from "../context/AuthContext";
 import { confirmDialog } from "./ui/ConfirmDialog";
 import { notify } from "../lib/toast";
 
-const AMT_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8000";
+
 
 /** Row/header grid of the "All Processed Items" table. Declared once so the
  *  header and the rows can never drift out of alignment. */
@@ -643,7 +644,7 @@ function LiveClipsModal({
 
   // audio_url from MongoDB is a relative path (/cdn/download/...) — prepend gateway base
   const fullUrl = (relUrl: string | null | undefined) =>
-    relUrl ? (relUrl.startsWith("http") ? relUrl : AMT_BASE + relUrl) : null;
+    relUrl ? (relUrl.startsWith("http") ? relUrl : amtUrl(relUrl)) : null;
 
   const playClip = (item: ProcessedItem) => {
     const url = fullUrl(item.audio_url || item.input_url);
@@ -1784,7 +1785,7 @@ export default function AnalyticsWidget() {
       setPlayingUrl(null);
       return;
     }
-    const audio = new Audio(AMT_BASE + url);
+    const audio = new Audio(amtUrl(url));
     audio.onended = () => setPlayingUrl(null);
     audio.play();
     audioRef.current = audio;
@@ -1793,7 +1794,7 @@ export default function AnalyticsWidget() {
 
   const handleDownload = useCallback((url: string, feature: string) => {
     const a = document.createElement("a");
-    a.href = AMT_BASE + url;
+    a.href = amtUrl(url);
     a.download = `${feature}-output.wav`;
     document.body.appendChild(a);
     a.click();

@@ -1,12 +1,34 @@
-// Inference routes (synthesize / transcribe / voices / translate / realtime) hit
-// the AMT pod directly via the single-origin tunnel — no gateway session needed.
-const AMT_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8000";
-
-// Gateway-auth'd DB routes (metering / history / storage / session / sync /
-// live-translation) require the Shielva session cookie, which is host-scoped to
-// the identity/gateway host. Calling them there (cross-origin, CORS already
-// allows the UI origin) sends the cookie; calling them via AMT_BASE would not.
+// Gateway-auth'd routes require the Shielva session cookie, which is host-scoped
+// to the identity/gateway host. Calling them there (cross-origin, CORS already
+// allows the UI origin) sends the cookie.
 const GATEWAY_BASE = process.env.NEXT_PUBLIC_IDENTITY_URL || "https://api.shielva.ai";
+
+/**
+ * Everything /amt/* goes through the gateway.
+ *
+ * This used to be `NEXT_PUBLIC_API_URL` (amt.shielva.ai) on the theory that
+ * inference hit the AMT pod directly through its own tunnel — true in the
+ * RunPod era. That host now has **no DNS record at all**, so every call
+ * through it failed at the network layer with a bare "Failed to fetch": voice
+ * cloning, the voice library, playback of generated audio in Analytics, and
+ * the voice sample player all broke for that one reason.
+ *
+ * The AMT API is alive in-cluster (`shielva-tts:8203`) and the gateway already
+ * routes `/amt/*` to it, so pointing at the gateway restores everything it
+ * actually serves — history, metering, storage, sync, and
+ * `/amt/v1/voices/{id}/audio`. It also sends the session cookie, which the
+ * direct host never did.
+ *
+ * ⚠️ The GPU inference half (`/translate`, `/synthesize`, `/classify`,
+ * `/voices` list, `/voices/train`, `/realtime`) is NOT deployed — those return
+ * an honest 404 now instead of a DNS failure. Callers must degrade visibly.
+ */
+const AMT_BASE = GATEWAY_BASE;
+
+/** Absolute URL for a server-relative audio path (Analytics playback, downloads). */
+export function amtUrl(path: string): string {
+  return path.startsWith("http") ? path : `${AMT_BASE}${path}`;
+}
 
 // ─── Public Session ID ─────────────────────────────────────────────────────────
 // Persisted in localStorage. Cleared when the user signs in.

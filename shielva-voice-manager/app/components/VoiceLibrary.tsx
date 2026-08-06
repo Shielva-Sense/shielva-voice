@@ -8,12 +8,20 @@ import UsageIndicator from "./UsageIndicator";
 import StoragePathWidget from "./StoragePathWidget";
 import VoiceLibraryModal from "./VoiceLibraryModal";
 import { useVoice } from "../context/VoiceContext";
-import { useVoices, useInvalidateVoices } from "../hooks/useVoices";
+import { useClonedVoices, useInvalidateVoices } from "../hooks/useVoices";
+import { engineLabel } from "../lib/voice-settings";
 import { confirmDialog } from "./ui/ConfirmDialog";
 
-export default function VoiceLibrary() {
+export interface VoiceLibraryProps {
+  /** The tenant's selected TTS engine — decides which store holds the clones. */
+  engine?: string | null;
+}
+
+export default function VoiceLibrary({ engine = null }: VoiceLibraryProps) {
   const { defaultVoiceId, setDefaultVoice } = useVoice();
-  const { voices, isLoading, isError } = useVoices();
+  const isCloudGpu = !engine || engine === "shielva";
+  const engineName = engine ? engineLabel(engine) : "the platform default engine";
+  const { voices, isLoading, isError } = useClonedVoices(engine);
   const invalidateVoices = useInvalidateVoices();
   const total = voices.length;
 
@@ -241,7 +249,11 @@ export default function VoiceLibrary() {
         </div>
         <div>
           <div className="vm-card-title">Voice Library</div>
-          <div className="vm-card-subtitle">Your cloned reference voices</div>
+          <div className="vm-card-subtitle">
+            {isCloudGpu
+              ? "Your cloned reference voices"
+              : `Your voices cloned on ${engineName}`}
+          </div>
         </div>
         <UsageIndicator resource="voice" />
         <span className="vm-tag vm-tag-gray">
@@ -256,7 +268,24 @@ export default function VoiceLibrary() {
 
       {showModal && <VoiceLibraryModal onClose={() => setShowModal(false)} />}
 
-      <StoragePathWidget />
+      {/* R2 holds the reference clips our OWN stack stores. A vendor-side clone
+          never touches our storage, so showing the R2 panel there would claim
+          something untrue about where the voice lives. */}
+      {isCloudGpu ? (
+        <StoragePathWidget />
+      ) : (
+        <div
+          style={{
+            fontSize: 11, lineHeight: 1.5, color: "var(--text-muted)",
+            padding: "8px 10px", marginBottom: 8, borderRadius: 8,
+            border: "1px solid var(--border-subtle)", background: "var(--surface-subtle)",
+          }}
+        >
+          These voices live in your {engineName} account, not in Shielva storage — {engineName}
+          {" "}holds the model and we only keep the id. Switch to the Cloud GPU engine in{" "}
+          <a href="/settings">Settings</a> to keep reference clips in your own R2 bucket.
+        </div>
+      )}
 
       {voices.length > 0 && (
         <div style={{ marginBottom: 8 }}>
@@ -339,8 +368,8 @@ export default function VoiceLibrary() {
               {langFilter
                 ? "Clear the filter or clone a voice in this language."
                 : isError
-                  ? "Voices could not be loaded right now. Clone a voice to get started."
-                  : "Use “Clone a voice” to add a ~10-second reference. It is ready immediately — no training."}
+                  ? `Voices could not be loaded from ${engineName} right now. Clone a voice to get started.`
+                  : `Use “Clone a voice” to add a ~10-second reference. It is cloned on ${engineName} and ready immediately — no training.`}
             </div>
           </div>
         )}
@@ -370,29 +399,39 @@ export default function VoiceLibrary() {
               </div>
 
               <div style={{ display: "flex", alignItems: "center", gap: 4, flexShrink: 0 }}>
-                <button
-                  className="vm-voice-delete"
-                  onClick={() => handleVoicePlay(v.voice_id)}
-                  aria-label={playingVoiceId === v.voice_id ? "Stop playback" : "Play sample"}
-                  title={playingVoiceId === v.voice_id ? "Stop playback" : "Play sample"}
-                  style={{ color: playingVoiceId === v.voice_id ? "var(--bamboo-400)" : undefined }}
-                >
-                  {voiceAudioLoading === v.voice_id
-                    ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
-                    : playingVoiceId === v.voice_id
-                      ? <Pause size={14} strokeWidth={2} />
-                      : <Play size={14} strokeWidth={2} />}
-                </button>
-                <button
-                  className="vm-voice-delete"
-                  onClick={() => handleVoiceDownload(v.voice_id)}
-                  aria-label="Download voice sample"
-                  title="Download voice sample"
-                >
-                  {downloadingVoiceId === v.voice_id
-                    ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
-                    : <Download size={14} strokeWidth={2} />}
-                </button>
+                {/* Playback and download read the STORED REFERENCE CLIP, which
+                    only exists for voices cloned on our own stack. A vendor
+                    holds the model and never gives the clip back, so these are
+                    hidden there rather than offered and then failing. Preview a
+                    vendor voice from the Text to Speech voice picker, which
+                    synthesizes a sample instead. */}
+                {isCloudGpu && (
+                  <>
+                    <button
+                      className="vm-voice-delete"
+                      onClick={() => handleVoicePlay(v.voice_id)}
+                      aria-label={playingVoiceId === v.voice_id ? "Stop playback" : "Play sample"}
+                      title={playingVoiceId === v.voice_id ? "Stop playback" : "Play sample"}
+                      style={{ color: playingVoiceId === v.voice_id ? "var(--bamboo-400)" : undefined }}
+                    >
+                      {voiceAudioLoading === v.voice_id
+                        ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
+                        : playingVoiceId === v.voice_id
+                          ? <Pause size={14} strokeWidth={2} />
+                          : <Play size={14} strokeWidth={2} />}
+                    </button>
+                    <button
+                      className="vm-voice-delete"
+                      onClick={() => handleVoiceDownload(v.voice_id)}
+                      aria-label="Download voice sample"
+                      title="Download voice sample"
+                    >
+                      {downloadingVoiceId === v.voice_id
+                        ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />
+                        : <Download size={14} strokeWidth={2} />}
+                    </button>
+                  </>
+                )}
                 <button
                   className="vm-voice-delete"
                   onClick={() => handleSetDefault(v.voice_id)}
@@ -403,12 +442,17 @@ export default function VoiceLibrary() {
                 >
                   <Star size={14} strokeWidth={2} fill={isDefault ? "currentColor" : "none"} />
                 </button>
+                {/* Delete goes to the cloud-GPU stores. There is no vendor-side
+                    delete route yet, so on a hosted engine it would report
+                    success and leave the voice in place — disabled until that
+                    route exists. */}
                 <button
                   className="vm-voice-delete"
                   onClick={() => void askDeleteOne(v.voice_id, v.name || v.voice_id)}
-                  disabled={deletingId === v.voice_id || bulkBusy}
+                  disabled={deletingId === v.voice_id || bulkBusy || !isCloudGpu}
                   aria-label="Delete voice"
-                  title="Delete voice"
+                  title={isCloudGpu ? "Delete voice" : `Delete this voice in your ${engineName} account`}
+                  style={!isCloudGpu ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
                 >
                   {deletingId === v.voice_id
                     ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />

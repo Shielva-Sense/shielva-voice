@@ -286,7 +286,7 @@ export default function Home() {
             <AnalyticsWidget />
             {gate.sttReady && <SpeechToText />}
             {gate.ttsReady && <TextToSpeech engine={gate.tts} />}
-            {gate.ttsReady && <VoiceLibrary />}
+            {gate.ttsReady && <VoiceLibrary engine={gate.tts} />}
             {gate.ttsReady && <VoiceTraining engine={gate.tts} />}
             {/* Translation and live translation are cloud-GPU-only paths
                 (Qwen / NLLB run on our stack). Hosted vendors do not offer
