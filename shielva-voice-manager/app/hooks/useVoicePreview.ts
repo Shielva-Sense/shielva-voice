@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { getSampleText } from "../components/LanguagePickerModal";
-import { synthesize as synthesizeViaPresence } from "../lib/voice-settings";
+import { fetchVoiceSample, synthesize as synthesizeViaPresence } from "../lib/voice-settings";
 import { fetchVoiceAudio } from "../lib/amt-api";
 import { notify } from "../lib/toast";
 
@@ -77,15 +77,23 @@ export function useVoicePreview(): VoicePreview {
       if (!url) {
         setLoadingId(id);
         try {
-          const blob = fromClip
-            ? await fetchVoiceAudio(id)
-            : (
-                await synthesizeViaPresence({
-                  text: getSampleText(language),
-                  language,
-                  ...(id ? { voiceId: id } : {}),
-                })
-              ).blob;
+          // Prefer the customer's OWN recording where we kept one. It is what
+          // they submitted, so it is what they mean by "play my voice" — a
+          // synthesized sample is the clone talking, which answers a different
+          // question. Falls through to synthesis when no clip was stored
+          // (voices cloned before clips were kept, or presets).
+          let blob: Blob | null = null;
+          if (id) blob = await fetchVoiceSample(id).catch(() => null);
+          if (!blob && fromClip) blob = await fetchVoiceAudio(id);
+          if (!blob) {
+            blob = (
+              await synthesizeViaPresence({
+                text: getSampleText(language),
+                language,
+                ...(id ? { voiceId: id } : {}),
+              })
+            ).blob;
+          }
           url = URL.createObjectURL(blob);
           urls.current[key] = url;
         } catch (err) {

@@ -10,7 +10,7 @@ import VoiceLibraryModal from "./VoiceLibraryModal";
 import { useVoice } from "../context/VoiceContext";
 import { useClonedVoices, useInvalidateVoices } from "../hooks/useVoices";
 import { useVoicePreview } from "../hooks/useVoicePreview";
-import { engineLabel } from "../lib/voice-settings";
+import { deleteClonedVoice, engineLabel } from "../lib/voice-settings";
 import { confirmDialog } from "./ui/ConfirmDialog";
 
 export interface VoiceLibraryProps {
@@ -111,6 +111,13 @@ export default function VoiceLibrary({ engine = null }: VoiceLibraryProps) {
    * one store (already half-deleted) still resolves cleanly.
    */
   const removeVoice = async (id: string): Promise<void> => {
+    // Hosted engines delete at the vendor via presence, which also drops our
+    // stored reference clip. Sending those at the cloud-GPU stores is what
+    // produced "Delete failed" — they 404 for a voice that never lived there.
+    if (!isCloudGpu) {
+      await deleteClonedVoice(id);
+      return;
+    }
     const voiceName = voices.find((v) => v.voice_id === id)?.name;
     const results = await Promise.allSettled([deleteVoiceFull(id, voiceName), deleteVoice(id)]);
     if (results.every((r) => r.status === "rejected")) {
@@ -410,17 +417,12 @@ export default function VoiceLibrary({ engine = null }: VoiceLibraryProps) {
                 >
                   <Star size={14} strokeWidth={2} fill={isDefault ? "currentColor" : "none"} />
                 </button>
-                {/* Delete goes to the cloud-GPU stores. There is no vendor-side
-                    delete route yet, so on a hosted engine it would report
-                    success and leave the voice in place — disabled until that
-                    route exists. */}
                 <button
                   className="vm-voice-delete"
                   onClick={() => void askDeleteOne(v.voice_id, v.name || v.voice_id)}
-                  disabled={deletingId === v.voice_id || bulkBusy || !isCloudGpu}
+                  disabled={deletingId === v.voice_id || bulkBusy}
                   aria-label="Delete voice"
-                  title={isCloudGpu ? "Delete voice" : `Delete this voice in your ${engineName} account`}
-                  style={!isCloudGpu ? { opacity: 0.4, cursor: "not-allowed" } : undefined}
+                  title={isCloudGpu ? "Delete voice" : `Delete from your ${engineName} account`}
                 >
                   {deletingId === v.voice_id
                     ? <div className="vm-spinner" style={{ width: 12, height: 12 }} />

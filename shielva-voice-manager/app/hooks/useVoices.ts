@@ -88,7 +88,13 @@ export function useVoices() {
 
 export function useInvalidateVoices() {
   const client = useQueryClient();
-  return () => client.invalidateQueries({ queryKey: VOICES_KEY });
+  // Both stores: the cloud-GPU registry and the per-engine owned list. A caller
+  // that just deleted or cloned does not know which one holds the voice, and
+  // refreshing only the GPU key left a hosted library showing a stale row.
+  return () => {
+    void client.invalidateQueries({ queryKey: VOICES_KEY });
+    void client.invalidateQueries({ queryKey: ["engine-voices-owned"] });
+  };
 }
 
 /** Merge a newly enrolled voice into the cache so it appears immediately. */

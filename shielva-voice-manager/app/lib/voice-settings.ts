@@ -105,6 +105,19 @@ export interface ClonedVoice {
   language: string;
 }
 
+/** presence-core's clone router. Separate prefix from /voice — it predates it. */
+const CLONE_BASE = `${GATEWAY_BASE}/presence/api/v1/voice-clone`;
+
+async function detail(res: Response): Promise<string> {
+  try {
+    const body = await res.json();
+    if (body?.detail) return String(body.detail);
+  } catch {
+    /* non-JSON error body — fall through to the status line */
+  }
+  return `HTTP ${res.status}`;
+}
+
 /**
  * Clone a voice from a reference clip using the tenant's active engine.
  *
@@ -112,41 +125,75 @@ export interface ClonedVoice {
  * is not deployed in every environment — in prod it does not even resolve — so
  * cloning died at the network layer ("Failed to fetch") for anyone on a hosted
  * engine, even though the engine they had selected could clone perfectly well.
- * presence-core resolves the provider per tenant and every provider in the
- * registry implements cloning.
+ *
+ * This calls presence-core's EXISTING `/voice-clone/upload`, which the desktop
+ * client has always used and which already dispatches per tenant — there was
+ * never a reason to add a second clone endpoint. `persist=false` because that
+ * flag stamps the voice onto a Presence *persona*, which is a desktop-delegate
+ * concept this UI has nothing to do with.
  */
 export async function cloneVoice(params: {
   audio: Blob;
   name: string;
   language?: string;
   durationMs?: number;
+  /** Identifies the caller to the vendor; the tenant scopes storage. */
+  userId?: string;
 }): Promise<ClonedVoice> {
   const form = new FormData();
-  // Name the part after the blob's own type so the vendor sees a sane filename
-  // and content-type; Cartesia keys its decoder off both.
-  const ext = (params.audio.type.split("/")[1] || "wav").split(";")[0];
-  form.append("audio", params.audio, `reference.${ext}`);
-  form.append("name", params.name);
+  const mime = (params.audio.type || "audio/wav").split(";")[0];
+  const ext = (mime.split("/")[1] || "wav");
+  form.append("sample", params.audio, `reference.${ext}`);
+  form.append("user_id", params.userId || "voice-manager");
+  form.append("display_name", params.name);
   form.append("language", params.language ?? "en");
+  form.append("mime_type", mime);
   form.append("duration_ms", String(Math.round(params.durationMs ?? 0)));
+  form.append("persist", "false");
 
   // No Content-Type header — the browser sets the multipart boundary itself.
-  const res = await fetch(`${VOICE_BASE}/clone`, {
+  const res = await fetch(`${CLONE_BASE}/upload`, {
     method: "POST",
     credentials: "include",
     body: form,
   });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = await res.json();
-      if (body?.detail) detail = String(body.detail);
-    } catch {
-      /* non-JSON error body — keep the status line */
-    }
-    throw new Error(detail);
-  }
-  return res.json() as Promise<ClonedVoice>;
+  if (!res.ok) throw new Error(await detail(res));
+  const body = (await res.json()) as { voice_id: string; provider: string; status: string };
+  return {
+    voice_id: body.voice_id,
+    provider: body.provider,
+    status: body.status,
+    name: params.name,
+    language: params.language ?? "en",
+  };
+}
+
+/**
+ * Delete a cloned voice at the provider AND drop our stored reference clip.
+ *
+ * Deleting used to go to the cloud-GPU stores regardless of engine, so on a
+ * hosted engine it simply failed ("Delete failed"). The provider call is what
+ * matters: if it fails, nothing local is removed either, so the library never
+ * shows a voice as gone while it is still live — and billing — at the vendor.
+ */
+export async function deleteClonedVoice(voiceId: string): Promise<void> {
+  const res = await fetch(`${VOICE_BASE}/voices/${encodeURIComponent(voiceId)}`, {
+    method: "DELETE",
+    credentials: "include",
+  });
+  if (!res.ok) throw new Error(await detail(res));
+}
+
+/** URL of the customer's own recording for a cloned voice. 404 if none kept. */
+export const voiceSampleUrl = (voiceId: string): string =>
+  `${VOICE_BASE}/voices/${encodeURIComponent(voiceId)}/sample`;
+
+/** Fetch the stored reference clip. Returns null when none was kept. */
+export async function fetchVoiceSample(voiceId: string): Promise<Blob | null> {
+  const res = await fetch(voiceSampleUrl(voiceId), { credentials: "include" });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(await detail(res));
+  return res.blob();
 }
 
 export interface SynthesizeParams {
