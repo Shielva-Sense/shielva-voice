@@ -76,8 +76,77 @@ async function req<T>(path: string, init?: RequestInit): Promise<T> {
 
 export const listEngines = (): Promise<EngineCatalog> => req<EngineCatalog>("/engines");
 
-export const listEngineVoices = (engine: string): Promise<{ engine: string; voices: PresetVoice[] }> =>
-  req(`/engines/${encodeURIComponent(engine)}/voices`);
+/**
+ * Preset voices published by one engine.
+ *
+ * `language` filters server-side — the picker must only ever offer voices that
+ * can actually speak the selected output language, and every vendor's catalog
+ * is far larger than one language's slice of it.
+ */
+export const listEngineVoices = (
+  engine: string,
+  opts?: { language?: string; limit?: number },
+): Promise<{ engine: string; voices: PresetVoice[] }> => {
+  const qs = new URLSearchParams();
+  if (opts?.language) qs.set("language", opts.language);
+  if (opts?.limit) qs.set("limit", String(opts.limit));
+  const query = qs.toString();
+  return req(`/engines/${encodeURIComponent(engine)}/voices${query ? `?${query}` : ""}`);
+};
+
+export interface SynthesizeParams {
+  text: string;
+  /** Preset or cloned voice. Empty → the engine's first preset for `language`. */
+  voiceId?: string;
+  language?: string;
+  speakingRate?: number;
+}
+
+export interface SynthesizeResult {
+  blob: Blob;
+  /** Which engine actually produced the audio, straight from the response. */
+  provider: string;
+}
+
+/**
+ * Synthesize through presence-core rather than the cloud-GPU pod directly.
+ *
+ * presence resolves BOTH the engine and the model per tenant, so this is the
+ * only call site that honours what the tenant chose in Settings. Calling
+ * `/amt/v1/synthesize` instead pins every tenant to the GPU stack — which is
+ * not deployed in every environment, where it simply 404s.
+ *
+ * The response is raw audio bytes (not JSON), so it is read as a blob.
+ */
+export async function synthesize(params: SynthesizeParams): Promise<SynthesizeResult> {
+  const res = await fetch(`${VOICE_BASE}/synthesize`, {
+    method: "POST",
+    credentials: "include",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      text: params.text,
+      voice_id: params.voiceId ?? "",
+      language: params.language ?? "en",
+      speaking_rate: params.speakingRate ?? 1.0,
+    }),
+  });
+  if (!res.ok) {
+    // These carry actionable detail ("no voice_id supplied and the active
+    // provider exposes no preset voices") — surface it rather than a status.
+    let detail = `HTTP ${res.status}`;
+    try {
+      const body = await res.json();
+      if (body?.detail) detail = String(body.detail);
+    } catch {
+      /* non-JSON error body — keep the status line */
+    }
+    throw new Error(detail);
+  }
+  return {
+    blob: await res.blob(),
+    provider: res.headers.get("X-Voice-Provider") ?? "",
+  };
+}
 
 export const getSettings = (): Promise<VoiceSettings> => req<VoiceSettings>("/settings");
 

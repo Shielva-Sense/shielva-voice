@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
-import { synthesizeSpeech, translate, getLanguages, recordUsage, CHATTERBOX_TTS_LANGS, type TranslateEngine, type TtsEngine } from "../lib/amt-api";
+import { synthesizeSpeech, translate, getLanguages, recordUsage, CHATTERBOX_TTS_LANGS, type TranslateEngine } from "../lib/amt-api";
+import { engineLabel, listEngineVoices, synthesize as synthesizeViaPresence, type PresetVoice } from "../lib/voice-settings";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
@@ -149,16 +151,23 @@ const KB_LAYOUTS: Record<string, string[][]> = {
 const PUBLIC_MAX_CHARS = Number(process.env.NEXT_PUBLIC_PUBLIC_MAX_TEXT_CHARS || "100");
 const PUBLIC_MAX_WORDS = 10;  // unauthenticated users only
 
-const TTS_STAGES = [
-  { label: "Synthesizing with Chatterbox...", percent: 55 },
-  { label: "Finalizing audio...", percent: 90 },
-];
-
-// Selectable TTS engines shown in the Voice engine picker.
-
 const TRANSLATE_STAGE = { label: "Translating text...", percent: 8 };
 
-export default function TextToSpeech() {
+/** Our own GPU stack. It is the only engine that clones from a Voice Library
+ *  reference, exposes translation, and stores the clip for replay. */
+const CLOUD_GPU = "shielva";
+
+export interface TextToSpeechProps {
+  /**
+   * The tenant's selected TTS engine, from Settings (`useEngineGate().tts`).
+   * Passed in rather than re-fetched so the page makes one settings round-trip,
+   * not one per card. Null means no selection is on file — the platform default
+   * applies and the card behaves as it did before engine selection existed.
+   */
+  engine?: string | null;
+}
+
+export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechProps) {
   const { defaultVoiceId } = useVoice();
   const { voices } = useVoices();
   const { canUseFeature, openModal: openStorageModal } = useStorage();
@@ -174,9 +183,8 @@ export default function TextToSpeech() {
   const [inputLang, setInputLang] = useState("en");
   const [outputLang, setOutputLang] = useState("en");
   const [engine, setEngine] = useState<TranslateEngine>("qwen");
-  // TTS engine follows the OUTPUT LANGUAGE:
-        const [ttsEngine] = useState<TtsEngine>("chatterbox");
-  const canSelectVoice = ttsEngine === "chatterbox";                 // clone only on Chatterbox
+  const isCloudGpu = !ttsEngine || ttsEngine === CLOUD_GPU;
+  const ttsEngineName = ttsEngine ? engineLabel(ttsEngine) : "the platform default engine";
   const [availableLangs, setAvailableLangs] = useState<string[]>(Object.keys(LANGUAGES));
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
@@ -240,21 +248,42 @@ export default function TextToSpeech() {
   const overCharLimit = !isAuthenticated && text.length > charLimit;
   const overLimit = overWordLimit || overCharLimit;
 
+  // ── The selected engine's own preset voices ──────────────────────────────
+  // Fetched once per engine and filtered client-side by output language, so
+  // changing the language dropdown re-filters the picker without another
+  // round-trip. A hosted vendor's full catalog is far larger than the default
+  // page of 50, hence the explicit limit.
+  const { data: presets = [] } = useQuery({
+    queryKey: ["engine-voices", ttsEngine],
+    queryFn: async (): Promise<PresetVoice[]> =>
+      (await listEngineVoices(ttsEngine as string, { limit: 200 })).voices,
+    enabled: Boolean(ttsEngine),
+    staleTime: 10 * 60 * 1000,
+    retry: 0,
+  });
+
+  const presetsForLang = presets.filter((p) => !p.language || p.language.split("-")[0] === outputLang);
+
+  // Cloned voices are account-scoped and only exist on our own stack.
+  const clonedVoices = isAuthenticated && isCloudGpu ? voices : [];
+
   // Human-readable label for the currently selected voice.
   const selectedVoiceName =
-    voices.find((v) => v.voice_id === voiceId)?.name || "Default Chatterbox voice";
-
-  // The output language drives the engine, not the other way around. English is the only
-    // every other language is Chatterbox-only, so we snap the engine to Chatterbox.
-  useEffect(() => {
-     
-  }, [outputLang]);
+    clonedVoices.find((v) => v.voice_id === voiceId)?.name
+    || presets.find((p) => p.voice_id === voiceId)?.name
+    || `Default ${ttsEngineName} voice`;
 
   // ── Computed option arrays for LanguageSelect ────────────────────────────
-  // The language menu always offers the full Chatterbox range (30) — the engine follows the
-  // chosen language rather than the language following the engine.
-  const engineLangOptions: LangOption[] = availableLangs
-    .filter((l) => LANGUAGES[l] && CHATTERBOX_TTS_LANGS.includes(l))
+  // Which languages are on offer is the ENGINE's answer, not a fixed list: on
+  // our own stack that is the Chatterbox range, and on a hosted vendor it is
+  // whatever languages its preset voices actually cover. Offering a language
+  // the selected engine cannot speak is what produced silent 502s.
+  const engineLangCodes: string[] = isCloudGpu
+    ? availableLangs.filter((l) => CHATTERBOX_TTS_LANGS.includes(l))
+    : [...new Set(presets.map((p) => p.language?.split("-")[0]).filter(Boolean) as string[])];
+
+  const engineLangOptions: LangOption[] = (engineLangCodes.length ? engineLangCodes : availableLangs)
+    .filter((l) => LANGUAGES[l])
     .map((l) => ({
       value: l,
       label: LANGUAGES[l].name,
@@ -264,6 +293,16 @@ export default function TextToSpeech() {
   const inputLangOptions = engineLangOptions;
   const outputLangOptions = engineLangOptions;
 
+  // A preset picked for one language cannot speak another — clear it rather
+  // than sending the engine a voice_id it will reject. Cloned voices are exempt:
+  // our own stack clones into whatever language is asked for.
+  const isClonedVoice = clonedVoices.some((v) => v.voice_id === voiceId);
+  const presetStillValid = presetsForLang.some((p) => p.voice_id === voiceId);
+  useEffect(() => {
+    if (!voiceId || isClonedVoice || !presets.length || presetStillValid) return;
+    setVoiceId("");
+  }, [voiceId, isClonedVoice, presetStillValid, presets.length]);
+
   const handleGenerate = async () => {
     if (!text.trim() || overLimit) return;
     setGenerating(true);
@@ -271,9 +310,11 @@ export default function TextToSpeech() {
     setTranslatedText(null);
 
     const needsTranslation = inputLang !== outputLang;
-    const stages = needsTranslation
-      ? [TRANSLATE_STAGE, ...TTS_STAGES]
-      : TTS_STAGES;
+    const ttsStages = [
+      { label: `Synthesizing with ${ttsEngineName}...`, percent: 55 },
+      { label: "Finalizing audio...", percent: 90 },
+    ];
+    const stages = needsTranslation ? [TRANSLATE_STAGE, ...ttsStages] : ttsStages;
     proc.startProcessing(stages);
     startTimers();
 
@@ -304,20 +345,41 @@ export default function TextToSpeech() {
         }
       }
 
-      // ── Synthesize. Chatterbox clones zero-shot (default reference or a Library voice);
-            const cloning = canSelectVoice && Boolean(voiceId);
-      setStep("Synthesizing with Chatterbox...");
+      // ── Synthesize with the engine the tenant actually selected ───────────
+      //
+      // Two paths, and the split is deliberate:
+      //   · our own GPU stack keeps the clip and hands back a URL, which is
+      //     what makes a Text-to-Speech row in Recent Items replayable, and it
+      //     is the only engine that clones from a Voice Library reference;
+      //   · every hosted engine goes through presence-core, which resolves the
+      //     provider AND the model per tenant. Sending those through
+      //     /amt/v1/synthesize would pin them to the GPU stack — which is not
+      //     deployed everywhere, and simply 404s where it is not.
+      setStep(`Synthesizing with ${ttsEngineName}...`);
       proc.addLog(
-        cloning
-            ? `Cloning "${selectedVoiceName}"...`
-            : "Using default Chatterbox reference voice...",
+        voiceId
+          ? `Using voice "${selectedVoiceName}"...`
+          : `Using the default ${ttsEngineName} voice...`,
       );
-      const { blob: wavBlob, audioUrl } = await synthesizeSpeech({
-        text: speakText,
-        engine: ttsEngine,
-        lang: outputLang,
-        ...(cloning ? { voiceId } : {}),
-      });
+      let wavBlob: Blob;
+      let audioUrl: string | undefined;
+      if (isCloudGpu) {
+        const res = await synthesizeSpeech({
+          text: speakText,
+          engine: "chatterbox",
+          lang: outputLang,
+          ...(voiceId ? { voiceId } : {}),
+        });
+        wavBlob = res.blob;
+        audioUrl = res.audioUrl;
+      } else {
+        const res = await synthesizeViaPresence({
+          text: speakText,
+          language: outputLang,
+          ...(voiceId ? { voiceId } : {}),
+        });
+        wavBlob = res.blob;
+      }
 
       proc.nextStage("Audio ready");
       // Use a data URL instead of a blob URL — data URLs are fully loaded into
@@ -350,7 +412,10 @@ export default function TextToSpeech() {
           inputSummary: text.trim(),
           outputSummary: speakText !== text ? speakText : "",
           textChars: speakText.length,
-          audioUrl,
+          // Hosted engines stream the audio back without storing it, so there
+          // is no URL to replay from — record the operation without one rather
+          // than pointing Recent Items at something that does not exist.
+          ...(audioUrl ? { audioUrl } : {}),
         }).then(() => refreshUsage());
       }
     } catch (err) {
@@ -362,7 +427,7 @@ export default function TextToSpeech() {
       } else {
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.toLowerCase().includes("fetch") || msg.toLowerCase().includes("synth")) {
-          notify.serviceOffline("Chatterbox TTS");
+          notify.serviceOffline(`${ttsEngineName} TTS`);
         } else {
           notify.error("Text-to-speech failed", msg);
         }
@@ -391,7 +456,7 @@ export default function TextToSpeech() {
         </div>
         <div>
           <div className="vm-card-title">Text to Speech</div>
-          <div className="vm-card-subtitle">Voice synthesis · Chatterbox</div>
+          <div className="vm-card-subtitle">Voice synthesis · {ttsEngineName}</div>
         </div>
         <UsageIndicator resource="both" />
       </div>
@@ -587,35 +652,55 @@ export default function TextToSpeech() {
         )}
       </div>
 
-            {canSelectVoice && (
-        <div style={{ marginTop: 12 }}>
-          <div className="vm-label" style={{ marginBottom: 4 }}>Voice</div>
-          <select
-            className="vm-select"
-            value={voiceId}
-            onChange={(e) => setVoiceId(e.target.value)}
-            disabled={generating}
-          >
-            <option value="">Default Chatterbox voice</option>
-            {/* Cloned voices are account-scoped — only offered to signed-in users. */}
-            {isAuthenticated && voices.map((v) => (
-              <option key={v.voice_id} value={v.voice_id}>
-                {v.name || v.voice_id}
-                {v.language ? ` · ${LANGUAGES[v.language]?.flag ?? ""} ${LANGUAGES[v.language]?.name ?? v.language}` : ""}
-              </option>
-            ))}
-          </select>
-          <div style={{ fontSize: 10, color: "var(--bamboo-500)", marginTop: 4, paddingLeft: 4 }}>
-            {!isAuthenticated
-              ? "Sign in to clone and use your own voice."
-              : voiceId
+      {/* Voice picker — the selected engine's own samples for the chosen output
+          language, plus this account's cloned voices where the engine supports
+          cloning. */}
+      <div style={{ marginTop: 12 }}>
+        <div className="vm-label" style={{ marginBottom: 4 }}>Voice</div>
+        <label htmlFor="tts-voice" className="vm-visually-hidden">Voice</label>
+        <select
+          id="tts-voice"
+          className="vm-select"
+          value={voiceId}
+          onChange={(e) => setVoiceId(e.target.value)}
+          disabled={generating}
+        >
+          <option value="">Default {ttsEngineName} voice</option>
+          {presetsForLang.length > 0 && (
+            <optgroup label={`${ttsEngineName} voices`}>
+              {presetsForLang.map((p) => (
+                <option key={p.voice_id} value={p.voice_id}>
+                  {p.name}
+                  {p.gender ? ` · ${p.gender}` : ""}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {clonedVoices.length > 0 && (
+            <optgroup label="Your cloned voices">
+              {clonedVoices.map((v) => (
+                <option key={v.voice_id} value={v.voice_id}>
+                  {v.name || v.voice_id}
+                  {v.language ? ` · ${LANGUAGES[v.language]?.flag ?? ""} ${LANGUAGES[v.language]?.name ?? v.language}` : ""}
+                </option>
+              ))}
+            </optgroup>
+          )}
+        </select>
+        <div style={{ fontSize: 10, color: "var(--bamboo-500)", marginTop: 4, paddingLeft: 4 }}>
+          {!isAuthenticated
+            ? "Sign in to clone and use your own voice."
+            : isCloudGpu
+              ? voiceId
                 ? "Zero-shot clone of your Voice Library reference — no training needed."
-                : voices.length === 0
+                : clonedVoices.length === 0
                   ? "Add a reference in the Voice Library to clone your own voice."
-                  : "Using the built-in Chatterbox reference. Pick a Library voice to clone your own."}
-          </div>
+                  : "Using the built-in reference. Pick a Library voice to clone your own."
+              : presetsForLang.length === 0
+                ? `${ttsEngineName} publishes no voices for ${LANGUAGES[outputLang]?.name ?? outputLang}. Pick another output language.`
+                : `${presetsForLang.length} ${ttsEngineName} voices for ${LANGUAGES[outputLang]?.name ?? outputLang}. Voice cloning runs on our own GPU stack — switch engines in Settings to use it.`}
         </div>
-      )}
+      </div>
 
       {/* Generate Button */}
       <button
@@ -633,7 +718,7 @@ export default function TextToSpeech() {
             <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 11, opacity: 0.65, letterSpacing: "0.02em" }}>
               <span>{elapsed}s elapsed</span>
               <span>·</span>
-              <span>Chatterbox — ~2–15s (cached instant)</span>
+              <span>{isCloudGpu ? `${ttsEngineName} — ~2–15s (cached instant)` : `${ttsEngineName} — usually under 2s`}</span>
             </div>
           </div>
         ) : (
@@ -653,9 +738,19 @@ export default function TextToSpeech() {
 
       {/* Info */}
       <div className="vm-info">
-        <strong>Chatterbox</strong> zero-shot cloning — 23 global + 8 Indian languages (~2–15s;
-        cached responses are instant). Pick a voice from your Voice Library, or use the
-        built-in default reference.
+        {isCloudGpu ? (
+          <>
+            <strong>Chatterbox</strong> zero-shot cloning — 23 global + 8 Indian languages (~2–15s;
+            cached responses are instant). Pick a voice from your Voice Library, or use the
+            built-in default reference.
+          </>
+        ) : (
+          <>
+            <strong>{ttsEngineName}</strong> — {engineLangOptions.length} languages and{" "}
+            {presets.length} preset voices, resolved per tenant from your Settings.{" "}
+            <a href="/settings">Change engine or model</a>.
+          </>
+        )}
       </div>
 
       {/* Language Picker Modal */}

@@ -166,7 +166,8 @@ export default function Home() {
         </h1>
         <p>
           Real-time speech recognition, voice cloning, neural translation, and intent
-          detection — powered by faster-whisper, Chatterbox, and Qwen.
+          detection — on the engine you choose. Run it on our own GPU stack, or point
+          it at Cartesia, ElevenLabs or Groq with your own key.
         </p>
         {!isAuthenticated && !isLoading && (
           <p className="vm-hero-trial-note">
@@ -284,7 +285,7 @@ export default function Home() {
           <div className="vm-grid">
             <AnalyticsWidget />
             {gate.sttReady && <SpeechToText />}
-            {gate.ttsReady && <TextToSpeech />}
+            {gate.ttsReady && <TextToSpeech engine={gate.tts} />}
             {gate.ttsReady && <VoiceLibrary />}
             {gate.ttsReady && <VoiceTraining />}
             {/* Translation and live translation are cloud-GPU-only paths

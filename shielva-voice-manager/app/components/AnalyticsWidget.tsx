@@ -36,8 +36,31 @@ import {
   type ProcessedItem,
 } from "../lib/amt-api";
 import { useAuth } from "../context/AuthContext";
+import { confirmDialog } from "./ui/ConfirmDialog";
+import { notify } from "../lib/toast";
 
 const AMT_BASE = process.env.NEXT_PUBLIC_API_URL || "https://localhost:8000";
+
+/** Row/header grid of the "All Processed Items" table. Declared once so the
+ *  header and the rows can never drift out of alignment. */
+const TABLE_COLUMNS = "24px 140px 1fr 1fr 120px 110px";
+
+const BULK_BTN: React.CSSProperties = {
+  height: 28,
+  padding: "0 10px",
+  borderRadius: 6,
+  fontSize: 12,
+  border: "1px solid var(--border-subtle)",
+  background: "var(--surface-subtle)",
+  color: "var(--text-primary)",
+  cursor: "pointer",
+};
+
+const BULK_BTN_DANGER: React.CSSProperties = {
+  ...BULK_BTN,
+  color: "#c0392b",
+  borderColor: "#c0392b55",
+};
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 
@@ -903,27 +926,10 @@ function ViewAllModal({
   const [page, setPage] = useState(0);
   const [expandedIdx, setExpandedIdx] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [clipsModal, setClipsModal] = useState<{ src: string; tgt: string } | null>(null);
   const PAGE_SIZE = 10;
-
-  const handleDelete = async (item: ProcessedItem, e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirmDeleteId !== item.id) {
-      setConfirmDeleteId(item.id);
-      return;
-    }
-    setConfirmDeleteId(null);
-    setDeletingId(item.id);
-    try {
-      await deleteHistoryItem(item.id);
-      await fetchItems();
-    } catch {
-      // silent
-    } finally {
-      setDeletingId(null);
-    }
-  };
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -931,12 +937,131 @@ function ViewAllModal({
       const res = await getHistory(page * PAGE_SIZE, PAGE_SIZE, featureFilter || undefined);
       setItems(res.items);
       setTotal(res.total);
-    } catch {
-      // silent
+    } catch (e) {
+      notify.error("Could not load items", e instanceof Error ? e.message : undefined);
     } finally {
       setLoading(false);
     }
   }, [page, featureFilter]);
+
+  const handleDelete = async (item: ProcessedItem, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (deletingId === item.id) return;
+    const label = (item.input_summary || item.output_summary || item.feature_label).trim();
+    const ok = await confirmDialog({
+      title: "Delete this item?",
+      message: (
+        <>
+          <b>{label.slice(0, 80)}{label.length > 80 ? "…" : ""}</b> and any audio stored with it
+          will be removed. This cannot be undone.
+        </>
+      ),
+      danger: true,
+    });
+    if (!ok) return;
+    setDeletingId(item.id);
+    try {
+      await deleteHistoryItem(item.id);
+      // Drop it locally so the row goes the moment the server confirms, rather
+      // than lingering for a round-trip and reading as "nothing happened".
+      setItems((prev) => prev.filter((i) => i.id !== item.id));
+      setTotal((t) => Math.max(0, t - 1));
+      notify.success("Item deleted");
+      await fetchItems();
+    } catch (err) {
+      notify.error("Delete failed", err instanceof Error ? err.message : "Could not remove the item.");
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  /**
+   * Delete a known set of ids.
+   *
+   * Sequential on purpose: firing 151 deletes at once is what makes the gateway
+   * rate-limit and return partial failures that look random to the user. Each
+   * id is reported individually so a partial run says exactly how far it got.
+   */
+  const runBulkDelete = async (ids: string[], what: string) => {
+    if (!ids.length || bulkBusy) return;
+    setBulkBusy(true);
+    let failed = 0;
+    for (const id of ids) {
+      try {
+        await deleteHistoryItem(id);
+      } catch {
+        failed += 1;
+      }
+    }
+    const done = ids.length - failed;
+    setSelectedIds(new Set());
+    setBulkBusy(false);
+    if (failed === 0) notify.success(`${done} ${what} deleted`);
+    else if (done === 0) notify.error("Delete failed", `Could not remove ${failed} ${what}.`);
+    else notify.error(`${done} deleted, ${failed} failed`, `Could not remove ${failed} ${what}.`);
+    // Deleting a whole page can leave the current page past the end. Moving to
+    // page 0 refetches via the page effect; if we are already there, refetch
+    // directly (setting the same value does not re-run the effect).
+    if (page !== 0) setPage(0);
+    else await fetchItems();
+  };
+
+  const handleDeleteSelected = async () => {
+    const ids = [...selectedIds];
+    const ok = await confirmDialog({
+      title: `Delete ${ids.length} selected ${ids.length === 1 ? "item" : "items"}?`,
+      message: "The items and any audio stored with them will be removed. This cannot be undone.",
+      danger: true,
+    });
+    if (ok) await runBulkDelete(ids, ids.length === 1 ? "item" : "items");
+  };
+
+  /**
+   * Delete every item matching the current feature filter — not just the page
+   * on screen. The table pages 10 at a time over 100+ items, so a "delete all"
+   * bounded by the visible rows would quietly leave almost everything behind.
+   */
+  const handleDeleteAll = async () => {
+    const scope = featureFilter
+      ? FEATURE_OPTIONS.find((o) => o.value === featureFilter)?.label ?? featureFilter
+      : null;
+    const ok = await confirmDialog({
+      title: scope ? `Delete all ${total} ${scope} items?` : `Delete all ${total} items?`,
+      message:
+        "Every item in this list — across all pages — and any audio stored with them will be removed. This cannot be undone.",
+      confirmLabel: "Delete all",
+      danger: true,
+    });
+    if (!ok) return;
+
+    setBulkBusy(true);
+    const ids: string[] = [];
+    try {
+      // Page through the whole result set to collect ids; the list endpoint caps
+      // what one call returns, so asking for `total` in one go is not reliable.
+      const FETCH_SIZE = 100;
+      for (let skip = 0; skip < total; skip += FETCH_SIZE) {
+        const res = await getHistory(skip, FETCH_SIZE, featureFilter || undefined);
+        if (!res.items.length) break;
+        ids.push(...res.items.map((i) => i.id));
+        if (res.items.length < FETCH_SIZE) break;
+      }
+    } catch (err) {
+      setBulkBusy(false);
+      notify.error("Delete failed", err instanceof Error ? err.message : "Could not list the items to delete.");
+      return;
+    }
+    setBulkBusy(false);
+    await runBulkDelete(ids, ids.length === 1 ? "item" : "items");
+  };
+
+  const toggleSelected = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   useEffect(() => {
     fetchItems();
@@ -958,6 +1083,18 @@ function ViewAllModal({
     : meaningful;
 
   const totalPages = Math.ceil(total / PAGE_SIZE);
+
+  // Selection is page-scoped ("select all" ticks what is on screen); deleting
+  // everything is a separate, explicitly-worded action.
+  const selectedOnPage = filtered.filter((i) => selectedIds.has(i.id));
+  const allOnPageSelected = filtered.length > 0 && selectedOnPage.length === filtered.length;
+  const toggleAllOnPage = () =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (allOnPageSelected) filtered.forEach((i) => next.delete(i.id));
+      else filtered.forEach((i) => next.add(i.id));
+      return next;
+    });
 
   const portal = createPortal(
     <div
@@ -1074,11 +1211,61 @@ function ViewAllModal({
           </div>
         </div>
 
+        {/* Bulk actions. "Delete all" spans every page, not just the ten rows
+            on screen — see handleDeleteAll. */}
+        <div
+          style={{
+            display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap",
+            padding: "8px 20px", borderBottom: "1px solid var(--border-subtle)",
+          }}
+        >
+          <span style={{ fontSize: 12, color: "var(--gray-400)" }}>
+            {selectedIds.size > 0 ? `${selectedIds.size} selected` : "Select items to delete"}
+          </span>
+          {bulkBusy && <div className="vm-spinner" style={{ width: 13, height: 13 }} />}
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            {selectedIds.size > 0 && (
+              <button
+                type="button"
+                onClick={() => setSelectedIds(new Set())}
+                disabled={bulkBusy}
+                style={BULK_BTN}
+              >
+                Clear
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => void handleDeleteSelected()}
+              disabled={bulkBusy || selectedIds.size === 0}
+              style={{
+                ...BULK_BTN,
+                opacity: bulkBusy || selectedIds.size === 0 ? 0.5 : 1,
+                cursor: bulkBusy || selectedIds.size === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              Delete selected
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleDeleteAll()}
+              disabled={bulkBusy || total === 0}
+              style={{
+                ...BULK_BTN_DANGER,
+                opacity: bulkBusy || total === 0 ? 0.5 : 1,
+                cursor: bulkBusy || total === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              Delete all ({total})
+            </button>
+          </div>
+        </div>
+
         {/* Table Header */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "140px 1fr 1fr 120px 110px",
+            gridTemplateColumns: TABLE_COLUMNS,
             gap: "8px",
             padding: "8px 20px",
             fontSize: "10px",
@@ -1089,6 +1276,14 @@ function ViewAllModal({
             borderBottom: "1px solid var(--border-subtle)",
           }}
         >
+          <input
+            type="checkbox"
+            checked={allOnPageSelected}
+            onChange={toggleAllOnPage}
+            disabled={filtered.length === 0 || bulkBusy}
+            aria-label={allOnPageSelected ? "Clear selection on this page" : "Select all items on this page"}
+            style={{ cursor: "pointer", justifySelf: "start" }}
+          />
           <span>Feature</span>
           <span>Input</span>
           <span>Output</span>
@@ -1150,7 +1345,7 @@ function ViewAllModal({
                     }}
                     style={{
                       display: "grid",
-                      gridTemplateColumns: "140px 1fr 1fr 120px 110px",
+                      gridTemplateColumns: TABLE_COLUMNS,
                       gap: "8px",
                       padding: "10px 0",
                       borderBottom: "1px solid var(--border-subtle)",
@@ -1160,6 +1355,17 @@ function ViewAllModal({
                       transition: "background 0.1s",
                     }}
                   >
+                    {/* Selection */}
+                    <input
+                      type="checkbox"
+                      checked={selectedIds.has(item.id)}
+                      onChange={() => toggleSelected(item.id)}
+                      onClick={(e) => e.stopPropagation()}
+                      disabled={bulkBusy}
+                      aria-label={`Select ${item.feature_label} item`}
+                      style={{ cursor: "pointer", justifySelf: "start" }}
+                    />
+
                     {/* Feature */}
                     <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
                       <div
@@ -1199,12 +1405,10 @@ function ViewAllModal({
                       {formatTimestamp(item.created_at)}
                     </div>
 
-                    {/* Actions.
-                        minWidth reserves room for the widest state (the inline
-                        "Delete? Yes No" confirm). Without it the cell grew when
-                        the confirm opened and pushed the controls over the
-                        timestamp column - the buttons visibly overlapped. */}
-                    <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end", alignItems: "center", minWidth: 132, flexShrink: 0 }}>
+                    {/* Actions. The cell is a fixed grid column, so it holds a
+                        fixed set of icon buttons and nothing that can grow —
+                        confirmation happens in the shared dialog, not in-row. */}
+                    <div style={{ display: "flex", gap: "4px", justifyContent: "flex-end", alignItems: "center" }}>
                       {audioUrl && (
                         <>
                           <button
@@ -1249,43 +1453,24 @@ function ViewAllModal({
                           <Volume2 size={11} />
                         </button>
                       )}
-                      {confirmDeleteId === item.id ? (
-                        <div style={{ display: "flex", alignItems: "center", gap: 4, whiteSpace: "nowrap" }} onClick={(e) => e.stopPropagation()}>
-                          <span style={{ fontSize: 11, color: "var(--gray-400)" }}>Delete?</span>
-                          <button
-                            onClick={(e) => handleDelete(item, e)}
-                            style={{
-                              background: "rgba(239,68,68,0.15)", border: "1px solid rgba(239,68,68,0.35)",
-                              borderRadius: "5px", padding: "3px 7px", cursor: "pointer",
-                              color: "#ef4444", fontSize: 11, fontWeight: 600,
-                            }}
-                          >Yes</button>
-                          <button
-                            onClick={(e) => { e.stopPropagation(); setConfirmDeleteId(null); }}
-                            style={{
-                              background: "var(--surface-subtle)", border: "1px solid var(--border-subtle)",
-                              borderRadius: "5px", padding: "3px 7px", cursor: "pointer",
-                              color: "var(--gray-400)", fontSize: 11,
-                            }}
-                          >No</button>
-                        </div>
-                      ) : (
-                        <button
-                          onClick={(e) => handleDelete(item, e)}
-                          disabled={deletingId === item.id}
-                          title="Delete"
-                          style={{
-                            background: "var(--surface-subtle)",
-                            border: "1px solid var(--border-subtle)",
-                            borderRadius: "5px", padding: "3px 5px", cursor: "pointer",
-                            color: deletingId === item.id ? "var(--gray-600)" : "#ef4444",
-                            display: "flex", alignItems: "center",
-                            opacity: deletingId === item.id ? 0.5 : 1,
-                          }}
-                        >
-                          <Trash2 size={11} />
-                        </button>
-                      )}
+                      <button
+                        onClick={(e) => void handleDelete(item, e)}
+                        disabled={deletingId === item.id || bulkBusy}
+                        title="Delete"
+                        aria-label="Delete item"
+                        style={{
+                          background: "var(--surface-subtle)",
+                          border: "1px solid var(--border-subtle)",
+                          borderRadius: "5px", padding: "3px 5px", cursor: "pointer",
+                          color: deletingId === item.id ? "var(--gray-600)" : "#ef4444",
+                          display: "flex", alignItems: "center",
+                          opacity: deletingId === item.id ? 0.5 : 1,
+                        }}
+                      >
+                        {deletingId === item.id
+                          ? <div className="vm-spinner" style={{ width: 11, height: 11, borderWidth: 2 }} />
+                          : <Trash2 size={11} />}
+                      </button>
                       <div style={{ color: "var(--gray-600)" }}>
                         {isExpanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
                       </div>

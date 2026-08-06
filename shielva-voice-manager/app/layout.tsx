@@ -9,6 +9,7 @@ import AuthGuard from "./components/AuthGuard";
 import ProcessingOverlay from "./components/ProcessingOverlay";
 import StorageConfigModal from "./components/StorageConfigModal";
 import LocalFileMissingToast from "./components/LocalFileMissingToast";
+import { ConfirmDialogHost } from "./components/ui/ConfirmDialog";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -47,6 +48,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <ProcessingOverlay />
               <StorageConfigModal />
               <LocalFileMissingToast />
+              {/* Single owner of destructive confirmation — see ui/ConfirmDialog. */}
+              <ConfirmDialogHost />
             </ProcessingProvider>
             </StorageProvider>
           </VoiceProvider>

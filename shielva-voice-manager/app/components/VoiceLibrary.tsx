@@ -9,6 +9,7 @@ import StoragePathWidget from "./StoragePathWidget";
 import VoiceLibraryModal from "./VoiceLibraryModal";
 import { useVoice } from "../context/VoiceContext";
 import { useVoices, useInvalidateVoices } from "../hooks/useVoices";
+import { confirmDialog } from "./ui/ConfirmDialog";
 
 export default function VoiceLibrary() {
   const { defaultVoiceId, setDefaultVoice } = useVoice();
@@ -28,11 +29,6 @@ export default function VoiceLibrary() {
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set());
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
-  /** Pending destructive action awaiting in-UI confirmation. Native
-   *  window.confirm is not used anywhere in this codebase. */
-  const [confirming, setConfirming] = useState<
-    { kind: "one"; id: string; label: string } | { kind: "many"; ids: string[]; label: string } | null
-  >(null);
 
   const voiceAudioUrls = useRef<Record<string, string>>({});
   const voiceAudioEl = useRef<HTMLAudioElement | null>(null);
@@ -211,13 +207,24 @@ export default function VoiceLibrary() {
     });
   };
 
-  /** Every destructive action routes through the same in-UI confirm strip. */
-  const confirmDelete = () => {
-    const pending = confirming;
-    setConfirming(null);
-    if (!pending) return;
-    if (pending.kind === "one") void runDeleteOne(pending.id, pending.label);
-    else void runDeleteMany(pending.ids, pending.label);
+  /** Every destructive action routes through the shared confirm dialog. */
+  const askDeleteOne = async (id: string, label: string) => {
+    const ok = await confirmDialog({
+      title: `Delete “${label}”?`,
+      message: "The reference clip and any cloned model are removed from every store. This cannot be undone.",
+      danger: true,
+    });
+    if (ok) await runDeleteOne(id, label);
+  };
+
+  const askDeleteMany = async (ids: string[], title: string) => {
+    const ok = await confirmDialog({
+      title,
+      message: "The reference clips and any cloned models are removed from every store. This cannot be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+    });
+    if (ok) await runDeleteMany(ids, "voices");
   };
 
   const shownVoices = voices.filter(
@@ -268,25 +275,6 @@ export default function VoiceLibrary() {
         </div>
       )}
 
-      {/* Destructive actions confirm in place rather than in a native dialog —
-          window.confirm is not used anywhere in this codebase. */}
-      {confirming && (
-        <div className="vm-vl-confirm" role="alertdialog" aria-live="assertive">
-          <span>
-            Delete {confirming.kind === "one" ? `“${confirming.label}”` : `${confirming.ids.length} ${confirming.label}`}?
-            This cannot be undone.
-          </span>
-          <div className="vm-vl-confirm-actions">
-            <button type="button" onClick={() => setConfirming(null)} className="vm-vl-btn">
-              Cancel
-            </button>
-            <button type="button" onClick={confirmDelete} className="vm-vl-btn vm-vl-btn--danger">
-              Delete
-            </button>
-          </div>
-        </div>
-      )}
-
       {!isLoading && shownVoices.length > 0 && (
         <div className="vm-vl-bulk">
           <label className="vm-vl-check">
@@ -307,7 +295,10 @@ export default function VoiceLibrary() {
               className="vm-vl-btn"
               disabled={bulkBusy || selectedShown.length === 0}
               onClick={() =>
-                setConfirming({ kind: "many", ids: selectedShown.map((v) => v.voice_id), label: "voices" })
+                void askDeleteMany(
+                  selectedShown.map((v) => v.voice_id),
+                  `Delete ${selectedShown.length} selected ${selectedShown.length === 1 ? "voice" : "voices"}?`,
+                )
               }
             >
               Delete selected
@@ -317,7 +308,10 @@ export default function VoiceLibrary() {
               className="vm-vl-btn vm-vl-btn--danger"
               disabled={bulkBusy}
               onClick={() =>
-                setConfirming({ kind: "many", ids: shownVoices.map((v) => v.voice_id), label: "voices" })
+                void askDeleteMany(
+                  shownVoices.map((v) => v.voice_id),
+                  `Delete all ${shownVoices.length} ${shownVoices.length === 1 ? "voice" : "voices"}?`,
+                )
               }
             >
               Delete all
@@ -411,9 +405,7 @@ export default function VoiceLibrary() {
                 </button>
                 <button
                   className="vm-voice-delete"
-                  onClick={() =>
-                    setConfirming({ kind: "one", id: v.voice_id, label: v.name || v.voice_id })
-                  }
+                  onClick={() => void askDeleteOne(v.voice_id, v.name || v.voice_id)}
                   disabled={deletingId === v.voice_id || bulkBusy}
                   aria-label="Delete voice"
                   title="Delete voice"
@@ -464,15 +456,6 @@ export default function VoiceLibrary() {
         .vm-vl-btn:hover:not(:disabled) { border-color: var(--border-strong, var(--border)); }
         .vm-vl-btn:disabled { opacity: 0.5; cursor: not-allowed; }
         .vm-vl-btn--danger { color: #c0392b; border-color: #c0392b55; }
-        .vm-vl-confirm {
-          display: flex; align-items: center; justify-content: space-between;
-          gap: 12px; flex-wrap: wrap;
-          padding: 10px 12px; margin-bottom: 10px;
-          border: 1px solid #c0392b55; border-radius: 9px;
-          background: var(--surface-hover, rgba(192, 57, 43, 0.05));
-          font-size: 13px; color: var(--text-primary);
-        }
-        .vm-vl-confirm-actions { display: flex; gap: 6px; }
 
         .vm-vl-empty {
           display: flex; flex-direction: column; align-items: center; text-align: center;
