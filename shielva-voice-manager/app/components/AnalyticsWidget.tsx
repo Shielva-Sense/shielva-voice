@@ -36,7 +36,6 @@ import {
   type HistoryStats,
   type ProcessedItem,
 } from "../lib/amt-api";
-import { useAuth } from "../context/AuthContext";
 import { confirmDialog } from "./ui/ConfirmDialog";
 import { notify } from "../lib/toast";
 
@@ -128,6 +127,27 @@ function formatNumber(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return String(n);
+}
+
+/**
+ * Render a duration given in MINUTES at a scale a human can read.
+ *
+ * A short synthesis is a few seconds, and "0.0 min" reads as "nothing
+ * happened" — which is exactly how real usage looked. Seconds below a minute,
+ * minutes below an hour, h+m above.
+ */
+function formatDuration(minutes: number): React.ReactNode {
+  const unit = (v: string, u: string) => (
+    <>
+      {v}
+      <span style={{ fontSize: "12px", fontWeight: 400, color: "var(--gray-500)" }}> {u}</span>
+    </>
+  );
+  const totalSec = Math.round((minutes || 0) * 60);
+  if (totalSec < 60) return unit(String(totalSec), totalSec === 1 ? "sec" : "sec");
+  if (totalSec < 3600) return unit((totalSec / 60).toFixed(1), "min");
+  const h = Math.floor(totalSec / 3600);
+  return unit(`${h}h ${Math.round((totalSec % 3600) / 60)}`, "min");
 }
 
 /** Human label for a raw feature key ("live_translation" → "Live Translation"). Prefers the
@@ -1746,7 +1766,6 @@ function ViewAllModal({
 // ─── Main Component ──────────────────────────────────────────────────────────
 
 export default function AnalyticsWidget() {
-  const { usageInfo } = useAuth();
   const [stats, setStats] = useState<HistoryStats | null>(null);
   const [history, setHistory] = useState<HistoryResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -1815,9 +1834,6 @@ export default function AnalyticsWidget() {
     window.speechSynthesis.speak(utterance);
     setSpeakingId(itemId);
   }, [speakingId]);
-
-  const textQuota = usageInfo?.quotas?.text_chars ?? 500_000;
-  const voiceQuota = usageInfo?.quotas?.voice_minutes ?? 60;
 
   const maxFeatureCount = stats
     ? Math.max(...Object.values(stats.feature_counts), 1)
@@ -1900,14 +1916,15 @@ export default function AnalyticsWidget() {
             <FileText size={13} style={{ color: "var(--bamboo-400)" }} />
             <span style={{ fontSize: "11px", color: "var(--gray-400)", fontWeight: 500 }}>Text Usage</span>
           </div>
-          <div style={{ fontSize: "24px", fontWeight: 700, color: "var(--text-primary)" }}>{formatNumber(stats.text_chars_used)}</div>
-          <div style={{ marginTop: "8px" }}>
-            <div style={{ width: "100%", height: "4px", background: "var(--surface-hover)", borderRadius: "2px", overflow: "hidden" }}>
-              <div style={{ width: `${Math.min((stats.text_chars_used / textQuota) * 100, 100)}%`, height: "100%", background: "var(--bamboo-400)", borderRadius: "2px", transition: "width 0.3s" }} />
-            </div>
-            <div style={{ fontSize: "10px", color: "var(--gray-500)", marginTop: "4px" }}>
-              {formatNumber(stats.text_chars_used)} / {formatNumber(textQuota)} chars
-            </div>
+          {/* Plain totals, no quota bar. These are "what you have produced",
+              not "what you have left" — pairing them with a ceiling made a
+              handful of characters read as progress toward a limit. */}
+          <div style={{ fontSize: "24px", fontWeight: 700, color: "var(--text-primary)" }}>
+            {formatNumber(stats.text_chars_used)}
+            <span style={{ fontSize: "12px", fontWeight: 400, color: "var(--gray-500)" }}> chars</span>
+          </div>
+          <div style={{ fontSize: "10px", color: "var(--gray-500)", marginTop: "6px" }}>
+            synthesized and translated
           </div>
         </div>
 
@@ -1917,15 +1934,10 @@ export default function AnalyticsWidget() {
             <span style={{ fontSize: "11px", color: "var(--gray-400)", fontWeight: 500 }}>Voice Usage</span>
           </div>
           <div style={{ fontSize: "24px", fontWeight: 700, color: "var(--text-primary)" }}>
-            {stats.voice_minutes_used.toFixed(1)}<span style={{ fontSize: "12px", fontWeight: 400, color: "var(--gray-500)" }}> min</span>
+            {formatDuration(stats.voice_minutes_used)}
           </div>
-          <div style={{ marginTop: "8px" }}>
-            <div style={{ width: "100%", height: "4px", background: "var(--surface-hover)", borderRadius: "2px", overflow: "hidden" }}>
-              <div style={{ width: `${Math.min((stats.voice_minutes_used / voiceQuota) * 100, 100)}%`, height: "100%", background: "var(--bamboo-400)", borderRadius: "2px", transition: "width 0.3s" }} />
-            </div>
-            <div style={{ fontSize: "10px", color: "var(--gray-500)", marginTop: "4px" }}>
-              {stats.voice_minutes_used.toFixed(1)} / {voiceQuota} min
-            </div>
+          <div style={{ fontSize: "10px", color: "var(--gray-500)", marginTop: "6px" }}>
+            audio actually produced
           </div>
         </div>
       </div>

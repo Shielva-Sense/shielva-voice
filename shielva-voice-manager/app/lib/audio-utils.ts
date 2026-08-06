@@ -205,6 +205,36 @@ export async function decodeAudioBlob(
 }
 
 /**
+ * Duration of an audio blob, in seconds.
+ *
+ * Voice usage is metered on audio ACTUALLY PRODUCED, so it has to be measured
+ * from the synthesized bytes rather than estimated from the input text — a
+ * character count says nothing about how long the speech runs, and every
+ * engine paces differently.
+ *
+ * Decodes at the clip's own sample rate (no resample — `decodeAudioBlob` forces
+ * 16 kHz for the cloning path, which is wasted work when all we need is a
+ * length). Returns 0 rather than throwing: metering is best-effort and must
+ * never take down a synthesis that already succeeded.
+ */
+export async function audioDurationSeconds(blob: Blob): Promise<number> {
+  const Ctx =
+    typeof AudioContext !== "undefined"
+      ? AudioContext
+      : (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+  if (!Ctx) return 0;
+  const ctx = new Ctx();
+  try {
+    const decoded = await ctx.decodeAudioData(await blob.arrayBuffer());
+    return decoded.duration;
+  } catch {
+    return 0;
+  } finally {
+    void ctx.close();
+  }
+}
+
+/**
  * Trim Float32 samples to a range [startSec, endSec] and encode as WAV blob.
  */
 export function trimToWav(

@@ -6,6 +6,7 @@ import { Volume2, Play } from "lucide-react";
 import { notify } from "../lib/toast";
 import { synthesizeSpeech, translate, getLanguages, recordUsage, CHATTERBOX_TTS_LANGS, type TranslateEngine } from "../lib/amt-api";
 import { engineLabel, listEngineVoices, synthesize as synthesizeViaPresence, type PresetVoice } from "../lib/voice-settings";
+import { audioDurationSeconds } from "../lib/audio-utils";
 import { Keyboard } from "lucide-react";
 import { type LangOption } from "./LanguageSelect";
 import LanguagePickerModal from "./LanguagePickerModal";
@@ -442,6 +443,11 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
       setAudioName(displayName);
       setStep("");
 
+      // Measure what was actually produced. Voice usage read a flat 0.0 min
+      // because nothing ever reported a duration — `voiceSeconds` existed on
+      // the metering call and no caller passed it.
+      const spokenSeconds = await audioDurationSeconds(wavBlob);
+
       clearTimers();
       proc.complete("Speech generated successfully");
       if (isAuthenticated) {
@@ -454,6 +460,7 @@ export default function TextToSpeech({ engine: ttsEngine = null }: TextToSpeechP
           inputSummary: text.trim(),
           outputSummary: speakText !== text ? speakText : "",
           textChars: speakText.length,
+          ...(spokenSeconds > 0 ? { voiceSeconds: spokenSeconds } : {}),
           // Hosted engines stream the audio back without storing it, so there
           // is no URL to replay from — record the operation without one rather
           // than pointing Recent Items at something that does not exist.
