@@ -35,13 +35,16 @@ ARG NEXT_PUBLIC_API_URL=https://amt.shielva.ai
 # Gateway ROOT (no path suffix). AuthContext appends /identity/api/v1/unified/*
 # onto it, so it must be the bare gateway origin.
 ARG NEXT_PUBLIC_IDENTITY_URL=https://api.shielva.ai
-# Login UI host. voice.shielva.ai is the INTERNAL/BUSINESS-audience app, so it
-# authenticates against login.shielva.ai. The customer-facing sibling
-# (speech.shielva.ai) is the one that uses signin.shielva.ai — the two are
-# forks of each other, so do not copy this value between them. Password reset
-# and account eligibility are gated on users.audience, not on role, which is
-# why pointing an app at the wrong host fails at sign-in rather than at build.
-ARG NEXT_PUBLIC_AUTH_URL=https://login.shielva.ai
+# Login UI host. voice.shielva.ai is a CUSTOMER-facing app and signs in at
+# signin.shielva.ai, alongside speech and ARC. login.shielva.ai is reserved for
+# the internal consoles (managed / devops / logstream / vault / acp), which have
+# no signup and no social providers.
+#
+# NOTE: eligibility is gated on users.audience, not on role. An account created
+# before this move is stamped `business` and will be refused here — it must be
+# migrated to the customer audience, and the failure appears at sign-in, never
+# at build time.
+ARG NEXT_PUBLIC_AUTH_URL=https://signin.shielva.ai
 # Public (unauthenticated) trial caps.
 ARG NEXT_PUBLIC_PUBLIC_MAX_TEXT_CHARS=100
 ARG NEXT_PUBLIC_PUBLIC_MAX_VOICE_SEC=5
