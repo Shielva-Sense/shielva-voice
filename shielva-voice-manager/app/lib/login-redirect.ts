@@ -67,3 +67,44 @@ export async function redirectToLogin(reason?: string): Promise<void> {
         window.location.href = `${LOGIN_URL}/login?${params.toString()}`;
     }
 }
+
+/**
+ * Send a user who has no organisation to the sign-in app's org-setup step.
+ *
+ * A voice signup deliberately gets NO tenant from identity
+ * (`requires_own_organisation`), precisely so the user names their own
+ * organisation here. Without this the user would land in voice tenant-less and
+ * never be asked — which is the state ARC was in before it grew the same guard.
+ */
+export async function redirectToOrgSetup(): Promise<void> {
+    if (typeof window === 'undefined') return;
+
+    // redirect_uri points at voice's own callback so the token flow completes on return.
+    const callbackUrl = `${window.location.origin}/auth/callback`;
+
+    try {
+        const fingerprint = await createBrowserFingerprint();
+        const res = await fetch(`${IDENTITY_URL}/api/v1/auth/login-session`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                app_id: APP_ID,
+                redirect_uri: callbackUrl,
+                browser_fingerprint: fingerprint,
+            }),
+        });
+
+        if (res.ok) {
+            const { session_id, user_hash } = await res.json();
+            window.location.href = `${LOGIN_URL}/login?sid=${session_id}&hash=${user_hash}&app=${APP_SLUG}&setup_org=true`;
+            return;
+        }
+        console.error('[Voice Org Setup Redirect] Session creation rejected:', res.status);
+    } catch (err) {
+        console.error('[Voice Org Setup Redirect] Failed to connect to identity service:', err);
+    }
+
+    // Identity unavailable — still send them to the org step; the sign-in app
+    // will re-authenticate if the grant is missing.
+    window.location.href = `${LOGIN_URL}/login?app=${APP_SLUG}&setup_org=true&redirect_uri=${encodeURIComponent(callbackUrl)}`;
+}
