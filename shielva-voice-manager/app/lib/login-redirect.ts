@@ -8,8 +8,39 @@ const LOGIN_URL = process.env.NEXT_PUBLIC_AUTH_URL || 'https://localhost:3000';
 const APP_ID = 'VOICE_MANAGER';
 const APP_SLUG = 'voice';
 
+/**
+ * The browser this grant was minted for, as the sign-in app will recompute it.
+ *
+ * 🚨 THE TWO SIDES MUST HASH THE SAME STRING, AND FOR MONTHS THEY DID NOT.
+ * Identity stores this at `POST /auth/login-session` and compares it at
+ * `/login-session/validate`; a mismatch is read as session fixation, the grant
+ * is INVALIDATED, and validate answers `{valid: false}` — inside an HTTP 200,
+ * which is why nothing anywhere reported an error.
+ *
+ * This app hashed `userAgent|language|platform`. The sign-in app hashes those
+ * three PLUS `screen.width|screen.height|timeZone`. So every grant from here
+ * failed, every time, and the sign-in app fell back to `return_to` instead of
+ * the grant's redirect_uri — delivering the token to whatever page the visitor
+ * came from rather than to the callback that reads one.
+ *
+ * ARC hit exactly this on 2026-09-23: sign in, land back on a page that does
+ * not read a token, sign in again, about a cycle a second with credentials
+ * asked once. Fixed there in shielva-arc#114; this is the same break, found by
+ * grep before anybody met it here.
+ *
+ * Six fields, in this order, joined by `|`. Do not "simplify" it. If the
+ * sign-in app's recipe ever changes, this changes in the same commit.
+ */
 async function createBrowserFingerprint(): Promise<string> {
-    const raw = `${navigator.userAgent}|${navigator.language}|${navigator.platform}`;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const raw = [
+        navigator.userAgent,
+        navigator.language,
+        navigator.platform,
+        screen.width,
+        screen.height,
+        tz,
+    ].join('|');
     const encoder = new TextEncoder();
     const data = encoder.encode(raw);
     const hashBuffer = await crypto.subtle.digest('SHA-256', data);
