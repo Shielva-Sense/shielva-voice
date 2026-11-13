@@ -13,7 +13,7 @@
   "dependencies": {
     "@tanstack/react-query": "^5.95.2",
     "lucide-react": "^0.575.0",
-    "next": "^16.1.6",
+    "next": "^16.4.6",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
     "sonner": "^2.0.7"
@@ -24,8 +24,20 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^16.3.0",
+    "eslint-config-next": "^16.4.6",
     "tailwindcss": "^4.0.7",
     "typescript": "^5"
+  },
+  "overrides": {
+    "brace-expansion@<2": "^1.1.22",
+    "brace-expansion@>=3": "^5.0.11",
+    "js-yaml@>=4": "^4.3.2",
+    "nanoid@>=3 <4": "^3.3.18",
+    "source-map-js": "^1.2.2",
+    "zod@<4.6.6": "^4.6.6",
+    "browserslist": "^4.28.7",
+    "immutable": "^5.1.8",
+    "follow-redirects": "^1.16.2",
+    "postcss": "^8.5.18"
   }
 }
